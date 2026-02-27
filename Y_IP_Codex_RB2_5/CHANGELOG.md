@@ -1,0 +1,51 @@
+# CHANGELOG (Y_IP_Codex_RB2_5)
+
+> 规则变更必须来源于：Decision Point 被人类确认，并写入 Contracts；此处记录“原因/影响/对应DP”。
+
+## [Unreleased]
+- 初始化目录与 Work Plan v1
+- 修正唯一主版本规范引用为 `Y_IP_Codex_RB2_5/重构2.md`
+- 增加 Decision Points 模板：`Y_IP_Codex_RB2_5/01_decisions/`（DP-001～DP-007）
+- 增加字段研究与表头草案：`Y_IP_Codex_RB2_5/00_discovery/field_research_v1.md`、`Y_IP_Codex_RB2_5/02_contracts/schema_contract_draft_v1.md`
+- 增加新增 DP：`Y_IP_Codex_RB2_5/01_decisions/`（DP-008～DP-010）
+- 增加新增 DP：`Y_IP_Codex_RB2_5/01_decisions/DP-011_Empty_sum_and_null_handling.md`
+- 增加 Metric Contract 草案：`Y_IP_Codex_RB2_5/02_contracts/metric_contract_draft_v1.md`
+- DP 确认：DP-008 选 C（H/E/F Members 全量镜像投影），DP-009 选 A（假日=周末），DP-011 选 A（sum=0 标准化，ratio 分母 0 保持 NULL）
+- DP-010 确认：按“密度/比例”分流分母（密度分母=IP数量；移动设备占比分母=设备量；上报类占比分母=上报量），对应 `DP-010` 选 A
+- DP 确认：DP-001/002/003/004/005/006/007/012 按推荐默认与指令确认（其中 DP-006 指定输出 schema=`rb20_v2_5`；DP-012 max_rounds=3）
+- 增加 DP 状态表：`Y_IP_Codex_RB2_5/01_decisions/DP_STATUS.md`
+- 增加 DP-012（ShardPlan 调整规则）与 ShardPlan SQL 骨架：`Y_IP_Codex_RB2_5/01_decisions/DP-012_ShardPlan_adjustment_heuristic.md`、`Y_IP_Codex_RB2_5/03_sql/00_contracts/10_shard_plan_skeleton.sql`
+- 增加 ShardPlan 可执行版（width_bucket 单次扫描/每轮，最多 3 轮）：`Y_IP_Codex_RB2_5/03_sql/00_contracts/10_shard_plan.sql`
+- 增加 DBHub 兼容的 ShardPlan SQL-only 实现（初始等分 + 两轮 5% 调整）：`Y_IP_Codex_RB2_5/03_sql/00_contracts/10_shard_plan_generate_sql_only.sql`
+- 增加 Gate-1 样本脚本（RB20_01A/01/02/03）与 Runbook：`Y_IP_Codex_RB2_5/03_sql/RB20_01/01A_abnormal_dedup.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_01/01_source_members_shard.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_02/02_natural_blocks_shard.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_03/03_pre_profile_shard.sql`、`Y_IP_Codex_RB2_5/04_runbook/01_gate1_sample_run.md`
+- 增加画像宽字段视图（避免 H/E/F 重复存宽字段，宽字段统一来自 `source_members`）：`Y_IP_Codex_RB2_5/03_sql/00_contracts/03_views_rb20_v2.sql`
+- 增加 DP-013（Step64 指标定义）并补齐 Metric Contract：`Y_IP_Codex_RB2_5/01_decisions/DP-013_Step64_metric_definitions.md`、`Y_IP_Codex_RB2_5/02_contracts/metric_contract_draft_v1.md`
+- 增加 Report Contract 草案与 Gate-0 discovery SQL：`Y_IP_Codex_RB2_5/02_contracts/report_contract_draft_v1.md`、`Y_IP_Codex_RB2_5/03_sql/00_discovery/00_source_sanity.sql`
+- 合同升级：`Y_IP_Codex_RB2_5/02_contracts/schema_contract_v1.md`、`Y_IP_Codex_RB2_5/02_contracts/metric_contract_v1.md`、`Y_IP_Codex_RB2_5/02_contracts/report_contract_v1.md`
+- 补齐 Step64 → FinalProfile 链路 SQL：`Y_IP_Codex_RB2_5/03_sql/RB20_11/11_window_headtail_shard.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_04/04_split_and_final_blocks_shard.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_04P/04P_final_profile_shard.sql`
+- 补齐 H/E/F 交付链路 SQL：`Y_IP_Codex_RB2_5/03_sql/RB20_05/05_h_blocks_and_members.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_06/06_r1_members_shard.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_07/07_e_atoms_runs_members_shard.sql`、`Y_IP_Codex_RB2_5/03_sql/RB20_08/08_f_members_shard.sql`
+- 补齐终验收断言 SQL（severity=STOP）：`Y_IP_Codex_RB2_5/03_sql/RB20_99/99_qa_assert.sql`
+- 更新宽字段视图：`rb20_v2_5.e_members_wide/f_members_wide` 扩展为与 H 同一套 W 源表全量镜像字段（满足“H/E/F 画像不回读源表”的字段一致性诉求）
+- 合同补充：ratio 命名/分母约定、StepStats 固定 metric_name 键名建议（用于移动覆盖/工作时占比/假日占比、CIDR 平均 IP 数等）
+- Runbook 扩展：Gate-1 覆盖 RB20_01→RB20_04P；新增 Gate-2 全链路并行 Runbook：`Y_IP_Codex_RB2_5/04_runbook/02_gate2_full_pipeline_run.md`
+- 报告模板：`Y_IP_Codex_RB2_5/06_reports/01_gate1_sample_template.md`、`Y_IP_Codex_RB2_5/06_reports/02_gate2_full_pipeline_template.md`
+- 修复全局 StepStats：`rb20_v2_5.step_stats` 全局行统一使用 `shard_id=-1`（PK 不允许 NULL），并同步更新 `RB20_01A` 脚本与合同说明
+- 修复 RB20_01 脚本：`WITH sp AS (...)` 作用域仅覆盖单条语句，原脚本会导致 `sp` 不存在；已调整为先 DELETE 再在 INSERT 语句内定义 `sp`
+- 修复 Views 更新方式：`CREATE OR REPLACE VIEW` 不能重排/改名列，已改为 `DROP VIEW IF EXISTS ...; CREATE VIEW ...`（`Y_IP_Codex_RB2_5/03_sql/00_contracts/03_views_rb20_v2.sql`）
+- 性能修复：RB20_04 的 Step64 样本统计从“按 window 行重复扫整块成员”改为“一次性展开 PreH 成员后按 (block,bucket64) 取 k=5”，避免乘法爆炸
+- 性能修复：RB20_07 的 `e_members` 由 “R1×run_range BETWEEN” 改为 “atom_to_run 映射后等值 join”，避免大范围 join 超时
+- 修复执行稳定性：移除 `RB20_02` 的 `SET enable_hashagg=off`（该设置会在同一会话串行执行多个 step 时泄漏，导致后续 RB20_03 等聚合极慢）
+- 防御性设置：`RB20_03` 显式 `SET enable_hashagg=on`，避免执行器复用会话时遗留 `enable_hashagg=off` 导致聚合长跑
+- 新增执行 Agent 单文件 Runbook（绝对路径、≤32 并发、失败即停、阶段校验）：`Y_IP_Codex_RB2_5/04_runbook/03_exec_agent_runbook_all_in_one.md`
+- 修复 ShardPlan：`Y_IP_Codex_RB2_5/03_sql/00_contracts/10_shard_plan_generate_sql_only.sql` 由“全 IPv4 min/max 等分”改为“按中国成员分布 NTILE(shard_cnt) 分位切分”，避免空 shard 触发断言 STOP；写入 `plan_round=0`
+- DP-012 状态对齐：ShardPlan 真实落地选用 DP-012 选 C（分位数重切 NTILE），避免稀疏/成簇分布下空 shard
+- DP 确认：DP-014 选 B（允许提高 shard_cnt；必须在开跑前写死），并把 shard_cnt 作为执行前必须写死的合同常量
+- DDL 对齐：`Y_IP_Codex_RB2_5/03_sql/00_contracts/01_ddl_rb20_v2_full.sql` 的 shard_id 物理约束统一扩展为 `0..255`（逻辑范围由 shard_cnt+QA_Assert 约束）
+- ShardPlan SQL-only 参数化：`Y_IP_Codex_RB2_5/03_sql/00_contracts/10_shard_plan_generate_sql_only.sql` 增加 `{{shard_cnt}}`，并按 `NTILE(shard_cnt)` 生成连续 shard_id
+- 终验收强化：`Y_IP_Codex_RB2_5/03_sql/RB20_99/99_qa_assert.sql` 增加 `shard_plan_matches_shard_cnt` 与 `per_shard_outputs_complete`（防止“汇总数字对但漏跑 shard/链路缺失”）
+- 性能修复：ShardPlan SQL-only 改为基于 /16（ip_long>>16）直方图的近似分位切分（避免全量排序 NTILE），显著降低 RB20_00D 耗时与风险
+- 性能修复：RB20_11 改为“一次性展开 PreH valid 成员再按 (block,bucket64) 聚合”，避免 cand×map 的重复 join
+- 修复执行脚本：`Y_IP_Codex_RB2_5/04_runbook/orchestrate_rb20_v2.py` 补齐 `{{shard_cnt}}` 替换，并从 shard_plan 拉取 shard 列表（兼容 shard_cnt>64），同时修正 QA 失败输出字段
+- DP-004 变更：PreH 从选 A 调整为选 C（仅包含“跨 bucket64 边界”的自然块），避免 Step64 对大量单 bucket 小块做无效评估；同步更新 `Y_IP_Codex_RB2_5/03_sql/RB20_03/03_pre_profile_shard.sql`
+- 性能修复：RB20_11 生成候选切点改为基于成员 bucket 集合（替代 `generate_series`），同时保留“任一侧 cnt=0 仍写审计行”的合同要求：`Y_IP_Codex_RB2_5/03_sql/RB20_11/11_window_headtail_shard.sql`
+- 鲁棒性修复：ShardPlan SQL-only 增加对极端倾斜 /16 的自适应细分（big16→/24），避免 shard_id 缺失触发断言错误：`Y_IP_Codex_RB2_5/03_sql/00_contracts/10_shard_plan_generate_sql_only.sql`

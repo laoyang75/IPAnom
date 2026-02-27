@@ -1,0 +1,1842 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RB20 v2.5 可视化监控平台</title>
+    <meta name="description" content="RB20 v2.5 Pipeline 协同调度看板与数据微观探查界面">
+    <link rel="stylesheet" href="/assets/style.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/echarts@5/dist/echarts.min.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <!-- ─── Header ─── -->
+        <header class="app-header">
+            <div class="logo">
+                <div class="icon">⬡</div>
+                <span>RB20 v2.5</span>
+            </div>
+            <nav class="nav-tabs">
+                <button class="nav-tab" :class="{active: currentTab === 'dashboard'}" @click="currentTab = 'dashboard'">
+                    📊 协同看板
+                </button>
+                <button class="nav-tab" :class="{active: currentTab === 'explorer'}" @click="currentTab = 'explorer'">
+                    🔍 数据探查
+                </button>
+                <button class="nav-tab" :class="{active: currentTab === 'qa'}" @click="currentTab = 'qa'">
+                    ✅ QA 断言
+                </button>
+                <button class="nav-tab" :class="{active: currentTab === 'lab'}" @click="currentTab = 'lab'; initLab()">
+                    🧪 库画像研究
+                </button>
+            </nav>
+            <div class="header-meta">
+                <span>Run:</span>
+                <select class="run-selector" v-model="selectedRunId" @change="loadRunData">
+                    <option v-for="r in runs" :value="r.run_id">{{ r.run_id }}</option>
+                </select>
+            </div>
+        </header>
+
+        <!-- ─── Main Content ─── -->
+        <main class="main-content">
+            <!-- Loading -->
+            <div v-if="loading" class="loading-container">
+                <div class="spinner"></div>
+            </div>
+
+            <!-- ══════════ Dashboard Tab ══════════ -->
+            <template v-if="currentTab === 'dashboard' && !loading">
+                <!-- KPI Cards -->
+                <div class="kpi-row">
+                    <div class="kpi-card kpi-source" style="animation-delay: 0s">
+                        <div class="kpi-icon">📦</div>
+                        <div class="kpi-label">源成员总数</div>
+                        <div class="kpi-value">{{ formatNum(overview.source_members_cnt) }}</div>
+                        <div class="kpi-sub">source_members</div>
+                    </div>
+                    <div class="kpi-card kpi-h" style="animation-delay: 0.05s">
+                        <div class="kpi-icon">🟠</div>
+                        <div class="kpi-label">H 类 (中型网络)</div>
+                        <div class="kpi-value">{{ formatNum(overview.h_members_cnt) }}</div>
+                        <div class="kpi-sub">{{ pct(overview.h_members_cnt, overview.keep_members_cnt) }} of Keep</div>
+                    </div>
+                    <div class="kpi-card kpi-e" style="animation-delay: 0.1s">
+                        <div class="kpi-icon">🟣</div>
+                        <div class="kpi-label">E 类 (密集原子)</div>
+                        <div class="kpi-value">{{ formatNum(overview.e_members_cnt) }}</div>
+                        <div class="kpi-sub">{{ pct(overview.e_members_cnt, overview.keep_members_cnt) }} of Keep</div>
+                    </div>
+                    <div class="kpi-card kpi-f" style="animation-delay: 0.15s">
+                        <div class="kpi-icon">🟢</div>
+                        <div class="kpi-label">F 类 (剩余散点)</div>
+                        <div class="kpi-value">{{ formatNum(overview.f_members_cnt) }}</div>
+                        <div class="kpi-sub">{{ pct(overview.f_members_cnt, overview.keep_members_cnt) }} of Keep</div>
+                    </div>
+                    <div class="kpi-card kpi-qa" style="animation-delay: 0.2s">
+                        <div class="kpi-icon">✅</div>
+                        <div class="kpi-label">QA 通过率</div>
+                        <div class="kpi-value">{{ overview.qa_passed }}/{{ overview.qa_total }}</div>
+                        <div class="kpi-sub">{{ overview.qa_passed === overview.qa_total ? 'ALL PASS' : 'HAS FAILURES'
+                            }}</div>
+                    </div>
+                    <div class="kpi-card" style="animation-delay: 0.25s">
+                        <div class="kpi-icon">🧊</div>
+                        <div class="kpi-label">自然块 / 最终块</div>
+                        <div class="kpi-value">{{ formatNum(overview.block_natural_cnt) }}</div>
+                        <div class="kpi-sub">→ {{ formatNum(overview.block_final_cnt) }} final</div>
+                    </div>
+                </div>
+
+                <!-- Network Tier + Conservation -->
+                <div class="grid-2">
+                    <div class="panel" style="animation-delay: 0.1s">
+                        <div class="panel-header">
+                            <h3>📊 网络规模分布</h3>
+                        </div>
+                        <div class="panel-body">
+                            <div v-for="t in tierDist" :key="t.network_tier" style="margin-bottom:10px;">
+                                <div
+                                    style="display:flex; justify-content:space-between; font-size:0.82rem; margin-bottom:4px;">
+                                    <span>{{ t.network_tier || '(空)' }}</span>
+                                    <span style="font-family: var(--font-mono); color: var(--text-secondary);">
+                                        {{ formatNum(t.block_count) }} 块
+                                    </span>
+                                </div>
+                                <div
+                                    style="height:6px; background:var(--bg-tertiary); border-radius:3px; overflow:hidden;">
+                                    <div :style="{
+                                    width: tierPct(t.block_count) + '%',
+                                    height: '100%',
+                                    background: tierColor(t.network_tier),
+                                    borderRadius: '3px',
+                                    transition: 'width 0.6s ease-out'
+                                }"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="panel" style="animation-delay: 0.15s">
+                        <div class="panel-header">
+                            <h3>⚖️ 守恒公式</h3>
+                        </div>
+                        <div class="panel-body">
+                            <div class="conservation-visual">
+                                <span class="conservation-item item-keep">Keep {{ formatNum(overview.keep_members_cnt)
+                                    }}</span>
+                                <span class="conservation-op">=</span>
+                                <span class="conservation-item item-h">H {{ formatNum(overview.h_members_cnt) }}</span>
+                                <span class="conservation-op">+</span>
+                                <span class="conservation-item item-e">E {{ formatNum(overview.e_members_cnt) }}</span>
+                                <span class="conservation-op">+</span>
+                                <span class="conservation-item item-f">F {{ formatNum(overview.f_members_cnt) }}</span>
+                            </div>
+                            <div v-if="conservationDiff !== null"
+                                style="margin-top:12px; font-size:0.82rem; color: var(--text-secondary);">
+                                差值: <span
+                                    :style="{color: conservationDiff === 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight:700}">{{
+                                    conservationDiff }}</span>
+                                <span v-if="conservationDiff === 0"> — ✅ 完美守恒</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- QA Quick Summary -->
+                <div class="panel" style="animation-delay: 0.2s">
+                    <div class="panel-header">
+                        <h3>🛡️ QA 断言结果</h3>
+                        <span
+                            :style="{color: allQAPassed ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 700, fontSize: '0.82rem'}">
+                            {{ allQAPassed ? '✅ ALL PASS' : '❌ HAS FAILURES' }}
+                        </span>
+                    </div>
+                    <div class="panel-body" style="overflow-x:auto;">
+                        <table class="qa-table">
+                            <thead>
+                                <tr>
+                                    <th>断言名称</th>
+                                    <th>说明</th>
+                                    <th>等级</th>
+                                    <th>状态</th>
+                                    <th>详情</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="q in qaResults" :key="q.assert_name">
+                                    <td style="font-family: var(--font-mono); font-weight: 500; font-size:0.78rem">{{
+                                        formatQAName(q.assert_name) }}</td>
+                                    <td style="font-size:0.78rem; color:var(--text-secondary); max-width:260px">{{
+                                        qaDescription(q.assert_name) }}</td>
+                                    <td><span class="badge" :class="q.severity === 'STOP' ? 'badge-fail' : ''">{{
+                                            q.severity }}</span></td>
+                                    <td><span class="badge" :class="q.pass_flag ? 'badge-pass' : 'badge-fail'">{{
+                                            q.pass_flag ? '✅ PASS' : '❌ FAIL' }}</span></td>
+                                    <td
+                                        style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); max-width:180px">
+                                        {{ q.details }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </template>
+
+            <!-- ══════════ Explorer Tab ══════════ -->
+            <template v-if="currentTab === 'explorer' && !loading">
+                <div class="search-bar">
+                    <input class="search-input" v-model="searchQuery" @keyup.enter="doSearch"
+                        placeholder="输入 IP 地址 (如 1.2.3.4) 或 ip_long 整数 或 block_id...">
+                    <button class="btn" @click="doSearch">🔍 查询</button>
+                </div>
+
+                <!-- Search Result -->
+                <div v-if="traceResult" key="trace-result">
+                    <!-- IP Info Card -->
+                    <div class="ip-info-card">
+                        <div
+                            style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap: 12px;">
+                            <div>
+                                <div class="ip-address">{{ traceResult.ip_address }}</div>
+                                <div
+                                    style="font-family: var(--font-mono); color: var(--text-secondary); font-size: 0.82rem;">
+                                    ip_long: {{ traceResult.ip_long }} &nbsp; | &nbsp; shard: {{ traceResult.shard_id ??
+                                    'N/A' }}
+                                </div>
+                            </div>
+                            <span class="class-badge" :class="'class-' + traceResult.classification">
+                                {{ classIcon(traceResult.classification) }} {{ traceResult.classification }}
+                            </span>
+                        </div>
+                        <div class="ip-info-grid" style="margin-top: 16px;">
+                            <div class="ip-info-item">
+                                <span class="info-label">国家</span>
+                                <span class="info-value">{{ traceResult.country || '—' }}</span>
+                            </div>
+                            <div class="ip-info-item">
+                                <span class="info-label">运营商</span>
+                                <span class="info-value">{{ traceResult.operator || '—' }}</span>
+                            </div>
+                            <div class="ip-info-item">
+                                <span class="info-label">上报次数</span>
+                                <span class="info-value">{{ formatNum(traceResult.report_count) }}</span>
+                            </div>
+                            <div class="ip-info-item">
+                                <span class="info-label">设备数量</span>
+                                <span class="info-value">{{ formatNum(traceResult.device_count) }}</span>
+                            </div>
+                            <div class="ip-info-item">
+                                <span class="info-label">移动设备</span>
+                                <span class="info-value">{{ formatNum(traceResult.mobile_device_count) }}</span>
+                            </div>
+                            <div class="ip-info-item">
+                                <span class="info-label">异常标记</span>
+                                <span class="info-value"
+                                    :style="{color: traceResult.is_abnormal ? 'var(--accent-red)' : 'var(--accent-green)'}">
+                                    {{ traceResult.is_abnormal ? '⚠️ 异常' : '✅ 正常' }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Block Info -->
+                    <div class="grid-2" v-if="traceResult.block_id_natural || traceResult.block_id_final">
+                        <div class="panel" v-if="traceResult.block_id_natural">
+                            <div class="panel-header">
+                                <h3>📦 自然块</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div class="ip-info-grid">
+                                    <div class="ip-info-item">
+                                        <span class="info-label">Block ID</span>
+                                        <span class="info-value" style="font-family:var(--font-mono);">{{
+                                            traceResult.block_id_natural }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">网络规模(Pre)</span>
+                                        <span class="info-value"
+                                            :style="{color: tierColor(traceResult.network_tier_pre)}">{{
+                                            traceResult.network_tier_pre || '—' }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">Keep/Drop</span>
+                                        <span class="info-value"
+                                            :style="{color: traceResult.keep_flag ? 'var(--accent-green)' : 'var(--accent-red)'}">
+                                            {{ traceResult.keep_flag ? '✅ Keep' : '❌ Drop' }}
+                                        </span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">密度(Pre)</span>
+                                        <span class="info-value">{{ traceResult.density_pre != null ?
+                                            traceResult.density_pre.toFixed(2) : '—' }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">Valid Count</span>
+                                        <span class="info-value">{{ formatNum(traceResult.valid_cnt_pre) }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">Simple Score</span>
+                                        <span class="info-value">{{ traceResult.simple_score_pre ?? '—' }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="panel" v-if="traceResult.block_id_final">
+                            <div class="panel-header">
+                                <h3>🏁 最终块</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div class="ip-info-grid">
+                                    <div class="ip-info-item">
+                                        <span class="info-label">Block ID</span>
+                                        <span class="info-value" style="font-family:var(--font-mono);">{{
+                                            traceResult.block_id_final }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">网络规模(Final)</span>
+                                        <span class="info-value"
+                                            :style="{color: tierColor(traceResult.network_tier_final)}">{{
+                                            traceResult.network_tier_final || '—' }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">密度(Final)</span>
+                                        <span class="info-value">{{ traceResult.density_final != null ?
+                                            traceResult.density_final.toFixed(2) : '—' }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">Valid Count</span>
+                                        <span class="info-value">{{ formatNum(traceResult.valid_cnt_final) }}</span>
+                                    </div>
+                                    <div class="ip-info-item">
+                                        <span class="info-label">Simple Score</span>
+                                        <span class="info-value">{{ traceResult.simple_score_final ?? '—' }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Trace Timeline -->
+                    <div class="panel" style="margin-top: 1rem;">
+                        <div class="panel-header">
+                            <h3>🔗 溯源链路</h3>
+                        </div>
+                        <div class="panel-body">
+                            <div class="trace-timeline">
+                                <div v-for="(stage, idx) in traceResult.stages" :key="idx" class="trace-stage"
+                                    :class="'stage-' + stage.status" :style="{animationDelay: (idx * 0.08) + 's'}">
+                                    <div class="stage-name">{{ stage.stage }}</div>
+                                    <div class="stage-detail">{{ stage.detail }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty state -->
+                <div v-if="!traceResult && !searchLoading" class="empty-state">
+                    <div class="empty-icon">🔍</div>
+                    <div class="empty-text">输入 IP 地址或 ip_long 整数开始探查</div>
+                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 8px;">
+                        示例: <code style="color: var(--accent-blue); cursor: pointer;"
+                            @click="searchQuery='1.0.1.0'; doSearch()">1.0.1.0</code>
+                    </div>
+                </div>
+
+                <div v-if="searchLoading" class="loading-container">
+                    <div class="spinner"></div>
+                </div>
+            </template>
+
+            <!-- ══════════ QA Tab ══════════ -->
+            <template v-if="currentTab === 'qa' && !loading">
+                <div class="kpi-row" style="margin-bottom: 2rem;">
+                    <div class="kpi-card kpi-qa">
+                        <div class="kpi-label">QA 断言总数</div>
+                        <div class="kpi-value">{{ qaResults.length }}</div>
+                    </div>
+                    <div class="kpi-card kpi-qa">
+                        <div class="kpi-label">通过数</div>
+                        <div class="kpi-value" style="color: var(--accent-green)">{{ qaResults.filter(q =>
+                            q.pass_flag).length }}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">失败数</div>
+                        <div class="kpi-value" style="color: var(--accent-red)">{{ qaResults.filter(q =>
+                            !q.pass_flag).length }}</div>
+                    </div>
+                    <div class="kpi-card kpi-qa">
+                        <div class="kpi-label">整体状态</div>
+                        <div class="kpi-value"
+                            :style="{color: allQAPassed ? 'var(--accent-green)' : 'var(--accent-red)'}">
+                            {{ allQAPassed ? 'ALL PASS' : 'FAILED' }}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detailed QA Cards -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 1rem;">
+                    <div v-for="q in qaResults" :key="q.assert_name" class="panel" style="animation-delay: 0.05s">
+                        <div class="panel-header">
+                            <h3>
+                                <span>{{ q.pass_flag ? '✅' : '❌' }}</span>
+                                <span style="font-family: var(--font-mono); font-size: 0.85rem;">{{ q.assert_name
+                                    }}</span>
+                            </h3>
+                            <span class="badge" :class="q.pass_flag ? 'badge-pass' : 'badge-fail'">
+                                {{ q.pass_flag ? 'PASS' : 'FAIL' }}
+                            </span>
+                        </div>
+                        <div class="panel-body">
+                            <div style="font-size: 0.82rem; color: var(--text-secondary);">
+                                <strong>Severity:</strong> {{ q.severity }}
+                            </div>
+                            <div
+                                style="font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; word-break: break-all;">
+                                {{ q.details }}
+                            </div>
+                            <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 6px;">
+                                {{ formatQAName(q.assert_name) }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Conservation Visual -->
+                <div class="panel" style="margin-top: 1.5rem;">
+                    <div class="panel-header">
+                        <h3>⚖️ 守恒公式验证</h3>
+                    </div>
+                    <div class="panel-body">
+                        <div class="conservation-visual">
+                            <span class="conservation-item item-keep">Keep {{ formatNum(overview.keep_members_cnt)
+                                }}</span>
+                            <span class="conservation-op">=</span>
+                            <span class="conservation-item item-h">H {{ formatNum(overview.h_members_cnt) }}</span>
+                            <span class="conservation-op">+</span>
+                            <span class="conservation-item item-e">E {{ formatNum(overview.e_members_cnt) }}</span>
+                            <span class="conservation-op">+</span>
+                            <span class="conservation-item item-f">F {{ formatNum(overview.f_members_cnt) }}</span>
+                        </div>
+                        <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-secondary);">
+                            差值: <strong
+                                :style="{color: conservationDiff === 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">
+                                {{ conservationDiff === 0 ? '✅ 完美守恒 (差值=0)' : '❌ 差值=' + conservationDiff }}
+                            </strong>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- ══════════ Library Lab Tab ══════════ -->
+            <template v-if="currentTab === 'lab' && !loading">
+                <div class="lab-header">
+                    <h2>🧪 库画像研究
+                        <select class="lib-selector" v-model="labLib" @change="loadLabData">
+                            <option value="h">🟠 H 库 (中型网络)</option>
+                            <option value="e">🟣 E 库 (密集原子)</option>
+                            <option value="f">🟢 F 库 (剩余散点)</option>
+                        </select>
+                    </h2>
+                </div>
+                <div class="sub-tabs">
+                    <button class="sub-tab" :class="{active: labSub==='overview'}" @click="labSub='overview'">📋
+                        概览</button>
+                    <button class="sub-tab" :class="{active: labSub==='profile'}"
+                        @click="labSub='profile'; renderProfileCharts()">📊 画像</button>
+                    <button class="sub-tab" :class="{active: labSub==='flow'}"
+                        @click="labSub='flow'; renderFlowCharts()">🔀 流转</button>
+                    <button class="sub-tab" :class="{active: labSub==='issues'}"
+                        @click="labSub='issues'; loadIssues()">⚠️ 问题</button>
+                    <button class="sub-tab" :class="{active: labSub==='deep'}"
+                        @click="labSub='deep'; loadDeepAnalysis()">🔬 H深度</button>
+                    <button class="sub-tab" :class="{active: labSub==='samples'}"
+                        @click="labSub='samples'; loadSamples()">🧬 样本</button>
+                    <button class="sub-tab" :class="{active: labSub==='rules'}"
+                        @click="labSub='rules'; loadRulePacks()">📦 Rules</button>
+                </div>
+
+                <!-- ── Overview Sub ── -->
+                <template v-if="labSub==='overview'">
+                    <div class="grid-3">
+                        <div v-for="(lib, key) in labOverview.libraries" :key="key" class="kpi-card"
+                            :class="'kpi-'+key">
+                            <div class="kpi-icon">{{ {h:'🟠',e:'🟣',f:'🟢'}[key] }}</div>
+                            <div class="kpi-label">{{ {h:'H 库',e:'E 库',f:'F 库'}[key] }}</div>
+                            <div class="kpi-value">{{ formatNum(lib.members_total) }}</div>
+                            <div class="kpi-sub">Valid {{ lib.valid_pct }}% | CR3 {{ lib.cr3_pct }}%</div>
+                        </div>
+                    </div>
+                    <div class="panel" v-if="labOverview.libraries">
+                        <div class="panel-header">
+                            <h3>📊 三库对比</h3>
+                        </div>
+                        <div class="panel-body" style="overflow-x:auto">
+                            <table class="compare-table">
+                                <thead>
+                                    <tr>
+                                        <th>指标</th>
+                                        <th class="col-h">H 库</th>
+                                        <th class="col-e">E 库</th>
+                                        <th class="col-f">F 库</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>成员数</td>
+                                        <td class="col-h">{{ formatNum(labOverview.libraries.h?.members_total) }}</td>
+                                        <td class="col-e">{{ formatNum(labOverview.libraries.e?.members_total) }}</td>
+                                        <td class="col-f">{{ formatNum(labOverview.libraries.f?.members_total) }}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>有效率</td>
+                                        <td class="col-h">{{ labOverview.libraries.h?.valid_pct }}%</td>
+                                        <td class="col-e">{{ labOverview.libraries.e?.valid_pct }}%</td>
+                                        <td class="col-f">{{ labOverview.libraries.f?.valid_pct }}%</td>
+                                    </tr>
+                                    <tr>
+                                        <td>运营商 CR3</td>
+                                        <td class="col-h">{{ labOverview.libraries.h?.cr3_pct }}%</td>
+                                        <td class="col-e">{{ labOverview.libraries.e?.cr3_pct }}%</td>
+                                        <td class="col-f">{{ labOverview.libraries.f?.cr3_pct }}%</td>
+                                    </tr>
+                                    <tr>
+                                        <td>上报 P50</td>
+                                        <td class="col-h">{{ labOverview.libraries.h?.report_p50 }}</td>
+                                        <td class="col-e">{{ labOverview.libraries.e?.report_p50 }}</td>
+                                        <td class="col-f">{{ labOverview.libraries.f?.report_p50 }}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>上报 P90</td>
+                                        <td class="col-h">{{ labOverview.libraries.h?.report_p90 }}</td>
+                                        <td class="col-e">{{ labOverview.libraries.e?.report_p90 }}</td>
+                                        <td class="col-f">{{ labOverview.libraries.f?.report_p90 }}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>设备 P50</td>
+                                        <td class="col-h">{{ labOverview.libraries.h?.device_p50 }}</td>
+                                        <td class="col-e">{{ labOverview.libraries.e?.device_p50 }}</td>
+                                        <td class="col-f">{{ labOverview.libraries.f?.device_p50 }}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>移动设备比</td>
+                                        <td class="col-h">{{ labOverview.libraries.h?.avg_mobile_ratio }}</td>
+                                        <td class="col-e">{{ labOverview.libraries.e?.avg_mobile_ratio }}</td>
+                                        <td class="col-f">{{ labOverview.libraries.f?.avg_mobile_ratio }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="grid-2" style="margin-top:1.5rem">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>🏷️ 全局漏斗</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-funnel" class="chart-container"></div>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>🥧 运营商 Top5 — {{ labLib.toUpperCase() }} 库</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-operator" class="chart-container"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- What-If E-Threshold Experiment -->
+                    <div class="panel" style="margin-top:1rem" v-if="labLib === 'e' || labLib === 'f'">
+                        <div class="panel-header">
+                            <h3>🧪 E 阈值实验 (what-if)</h3>
+                        </div>
+                        <div class="panel-body">
+                            <p style="color:var(--text-secondary);font-size:0.8rem;margin-bottom:0.8rem">
+                                调整进入 E 库的门槛：原子密度 (当前 valid_cnt≥7 等价于 density≥0.2) 与 run 长度 (当前连打≥3)。
+                            </p>
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+                                <div style="display:flex;gap:4px;align-items:center;font-size:0.8rem">
+                                    <span style="color:var(--text-secondary)">原子需 valid_ip_cnt ≥</span>
+                                    <input type="number" v-model.number="eThresholds.min_valid_cnt" min="1" max="32"
+                                        style="width:50px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:2px 4px;font-size:0.8rem">
+                                </div>
+                                <div style="display:flex;gap:4px;align-items:center;font-size:0.8rem">
+                                    <span style="color:var(--text-secondary)">连打需 run_len ≥</span>
+                                    <input type="number" v-model.number="eThresholds.min_run_len" min="1" max="100"
+                                        style="width:50px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:2px 4px;font-size:0.8rem">
+                                </div>
+                                <button class="btn" style="padding:4px 16px" @click="runEWhatIf()"
+                                    :disabled="eLoading">{{ eLoading ? '计算中...' : '▶ 运行评估' }}</button>
+                                <button class="btn" style="padding:4px 12px;opacity:0.6"
+                                    @click="eThresholds.min_valid_cnt=7; eThresholds.min_run_len=3">重置</button>
+                            </div>
+
+                            <template v-if="eResult">
+                                <div class="grid-2" style="margin-top:1rem">
+                                    <div class="kpi-card"
+                                        :style="{borderLeft: eResult.summary.delta_atoms > 0 ? '3px solid var(--accent-green)' : eResult.summary.delta_atoms < 0 ? '3px solid var(--accent-red)' : ''}">
+                                        <div class="kpi-label">E 原子数变化</div>
+                                        <div class="kpi-value">{{ eResult.summary.delta_atoms > 0 ? '+' : '' }}{{
+                                            formatNum(eResult.summary.delta_atoms) }}</div>
+                                        <div class="kpi-sub">{{ formatNum(eResult.summary.old_pass_atoms) }} → {{
+                                            formatNum(eResult.summary.new_pass_atoms) }}</div>
+                                    </div>
+                                    <div class="kpi-card"
+                                        :style="{borderLeft: eResult.summary.delta_runs > 0 ? '3px solid var(--accent-green)' : eResult.summary.delta_runs < 0 ? '3px solid var(--accent-red)' : ''}">
+                                        <div class="kpi-label">E Run 数量变化</div>
+                                        <div class="kpi-value">{{ eResult.summary.delta_runs > 0 ? '+' : '' }}{{
+                                            formatNum(eResult.summary.delta_runs) }}</div>
+                                        <div class="kpi-sub">{{ formatNum(eResult.summary.old_pass_runs) }} → {{
+                                            formatNum(eResult.summary.new_pass_runs) }}</div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Profile Sub ── -->
+                <template v-if="labSub==='profile'">
+                    <div class="grid-2">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📈 上报次数分布</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-reports" class="chart-container"></div>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📈 设备数量分布</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-devices" class="chart-container"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📈 运营商 Top15</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-op-bar" class="chart-container"></div>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📈 {{ labLib==='h'?'Simple Score':'移动设备比例' }} 分布</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-extra" class="chart-container"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid-2" v-if="labLib==='h'" style="margin-top:1.5rem">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📈 H Block 散点图 (密度 vs Valid个数)</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-scatter" class="chart-container-lg"></div>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📦 运营商密度箱线图 (Top 5)</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-boxplot" class="chart-container-lg"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="panel" v-if="labLib==='e' && eSuspicious.length" style="margin-top:1.5rem">
+                        <div class="panel-header">
+                            <h3>🔍 E 库可疑连续段 (Top 50)</h3>
+                        </div>
+                        <div class="panel-body">
+                            <p style="color:var(--text-secondary);font-size:0.8rem;margin-bottom:0.8rem">
+                                连打长度 ≥ 3，但平均被识别原子的有效 IP 数较低 (< 4)。可能包含低质长段。 </p>
+                                    <table class="compare-table" style="font-size:0.8rem">
+                                        <thead>
+                                            <tr>
+                                                <th>Block ID Final</th>
+                                                <th>Run Len (连打)</th>
+                                                <th>原成员数</th>
+                                                <th>平均 Valid IP</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="r in eSuspicious" :key="r.block_id_final">
+                                                <td class="font-mono">{{ r.block_id_final }}</td>
+                                                <td>{{ r.run_len }}</td>
+                                                <td>{{ formatNum(r.member_cnt) }}</td>
+                                                <td style="color:var(--accent-red)">{{ r.avg_valid_cnt }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                        </div>
+                    </div>
+
+                    <div class="panel" v-if="labLib==='f' && fOpportunities.length" style="margin-top:1.5rem">
+                        <div class="panel-header">
+                            <h3>🔍 F 库机会带 (Top 50)</h3>
+                        </div>
+                        <div class="panel-body">
+                            <p style="color:var(--text-secondary);font-size:0.8rem;margin-bottom:0.8rem">
+                                被打入 F 库，但在对应 E Atom 中 Valid IP 数量较高 (≥ 5)。可能通过微调阈值进入 E 库。
+                            </p>
+                            <table class="compare-table" style="font-size:0.8rem">
+                                <thead>
+                                    <tr>
+                                        <th>IP Long (F 成员)</th>
+                                        <th>Block ID Final</th>
+                                        <th>所属原子的 Valid IP</th>
+                                        <th>所属原子总规模</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="opp in fOpportunities" :key="opp.ip_long">
+                                        <td class="font-mono">{{ opp.ip_long }}</td>
+                                        <td class="font-mono">{{ opp.block_id_final }}</td>
+                                        <td style="color:var(--accent-green)">{{ opp.valid_ip_cnt }}</td>
+                                        <td>{{ opp.atom_size }}</td>
+                                        <td>
+                                            <button class="btn" style="padding:2px 8px;font-size:0.7rem"
+                                                @click="jumpToExplorer(opp.ip_long)">详情</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Flow Sub ── -->
+                <template v-if="labSub==='flow'">
+                    <div class="grid-2">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>🔀 全局漏斗 (Source→H/E/F)</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-flow-funnel" class="chart-container-lg"></div>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>🔀 {{ labLib==='h'? 'Tier 漂移 (Pre→Final)' : '密度/Run 漏斗' }}</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-flow-sankey" class="chart-container-lg"></div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Issues Sub (Three-Section Board) ── -->
+                <template v-if="labSub==='issues'">
+                    <div v-if="labIssues.length===0" class="empty-state">
+                        <div class="empty-icon">✅</div>
+                        <div class="empty-text">未检测到异常问题</div>
+                    </div>
+                    <div v-else>
+                        <!-- Top: Radar / Summary Stats -->
+                        <div class="grid-3" style="margin-bottom:1.5rem">
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-red)">
+                                <div class="kpi-label">🔴 严重问题 (High)</div>
+                                <div class="kpi-value">{{ labIssues.filter(i => i.severity==='high').length }}</div>
+                            </div>
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-yellow)">
+                                <div class="kpi-label">🟡 警告 (Medium)</div>
+                                <div class="kpi-value">{{ labIssues.filter(i => i.severity==='medium').length }}</div>
+                            </div>
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-subtle)">
+                                <div class="kpi-label">ℹ️ 提示 (Low)</div>
+                                <div class="kpi-value">{{ labIssues.filter(i => i.severity==='low').length }}</div>
+                            </div>
+                        </div>
+
+                        <!-- Middle: Issue Table -->
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📋 问题列表</h3>
+                            </div>
+                            <div class="panel-body">
+                                <table class="compare-table" style="font-size:0.8rem">
+                                    <thead>
+                                        <tr>
+                                            <th>级别</th>
+                                            <th>分类</th>
+                                            <th>问题描述</th>
+                                            <th>细节</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <template v-for="(iss, idx) in labIssues" :key="iss.id || idx">
+                                            <tr :style="selectedIssueIdx === idx ? 'background:var(--bg-tertiary)' : ''"
+                                                @click="selectedIssueIdx = selectedIssueIdx === idx ? null : idx"
+                                                style="cursor:pointer">
+                                                <td>
+                                                    <span class="severity-badge" :class="iss.severity">{{ iss.severity
+                                                        }}</span>
+                                                </td>
+                                                <td><b>{{ iss.title }}</b></td>
+                                                <td>{{ iss.description }}</td>
+                                                <td>{{ Array.isArray(iss.data) ? iss.data.length + ' 条记录' : '摘要数据' }}
+                                                </td>
+                                            </tr>
+                                            <!-- Bottom: Detail Drawer (Row expansion) -->
+                                            <tr v-if="selectedIssueIdx === idx">
+                                                <td colspan="4" style="padding:0">
+                                                    <div
+                                                        style="padding:1rem;background:var(--bg-primary);border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+                                                        <h4
+                                                            style="margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-secondary)">
+                                                            详情数据</h4>
+                                                        <template v-if="Array.isArray(iss.data)">
+                                                            <div style="max-height:300px;overflow-y:auto">
+                                                                <table class="compare-table"
+                                                                    style="font-size:0.75rem;margin:0">
+                                                                    <thead>
+                                                                        <tr>
+                                                                            <th v-for="k in Object.keys(iss.data[0] || {})"
+                                                                                :key="k">{{ k }}</th>
+                                                                            <th>操作</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        <tr v-for="(row,i) in iss.data" :key="i">
+                                                                            <td v-for="k in Object.keys(row)" :key="k">
+                                                                                <span
+                                                                                    :class="(k==='block_id_final'||k==='ip_long')?'font-mono':''">{{
+                                                                                    row[k] }}</span>
+                                                                            </td>
+                                                                            <td>
+                                                                                <button
+                                                                                    v-if="row.ip_long || row.block_id_final"
+                                                                                    class="btn"
+                                                                                    style="padding:2px 6px;font-size:0.7rem;opacity:0.8"
+                                                                                    @click.stop="jumpToExplorer(row.ip_long || row.block_id_final)">Explorer</button>
+                                                                            </td>
+                                                                        </tr>
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        </template>
+                                                        <template v-else-if="typeof iss.data === 'object'">
+                                                            <div v-for="(v,k) in iss.data" :key="k"
+                                                                style="display:inline-block;margin-right:16px;background:var(--bg-tertiary);padding:4px 8px;border-radius:4px">
+                                                                <span
+                                                                    style="color:var(--text-secondary);font-size:0.75rem">{{
+                                                                    k }}:</span>
+                                                                <strong>{{ formatNum(v) }}</strong>
+                                                            </div>
+                                                        </template>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── H Deep Analysis ── -->
+                <template v-if="labSub==='deep'">
+                    <div class="grid-3" v-if="labDeep.overall">
+                        <div class="kpi-card">
+                            <div class="kpi-icon">✂️</div>
+                            <div class="kpi-label">实际切分</div>
+                            <div class="kpi-value">{{ formatNum(labDeep.overall.actual_cuts) }}</div>
+                            <div class="kpi-sub">/ {{ formatNum(labDeep.overall.total_events) }} 候选</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon">⚠️</div>
+                            <div class="kpi-label">可疑切分</div>
+                            <div class="kpi-value">{{ formatNum(labDeep.overall.suspicious_cuts) }}</div>
+                            <div class="kpi-sub">样本≤3</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon">🔀</div>
+                            <div class="kpi-label">H来自切分</div>
+                            <div class="kpi-value">{{ formatNum(labDeep.h_origin?.h_from_split) }}</div>
+                            <div class="kpi-sub">/ {{ formatNum(labDeep.h_origin?.h_total_blocks) }} 总块</div>
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>🗺️ Tier 漂移矩阵</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-tier-drift" class="chart-container-lg"></div>
+                            </div>
+                        </div>
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>✂️ 触发器占比</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div id="chart-triggers" class="chart-container-lg"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="panel" style="margin-top:1rem" v-if="labDeep.suspicious && labDeep.suspicious.length">
+                        <div class="panel-header">
+                            <h3>🔍 可疑切分 Top30</h3>
+                        </div>
+                        <div class="panel-body" style="overflow-x:auto">
+                            <table class="compare-table" style="font-size:0.75rem">
+                                <thead>
+                                    <tr>
+                                        <th>block_id</th>
+                                        <th>cut_ip</th>
+                                        <th>左N</th>
+                                        <th>右N</th>
+                                        <th>cv_margin</th>
+                                        <th>ratio_rpt</th>
+                                        <th>opl</th>
+                                        <th>opr</th>
+                                        <th>tier</th>
+                                        <th>score</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="s in labDeep.suspicious" :key="s.cut_ip_long">
+                                        <td style="font-family:var(--font-mono)">{{ s.block_id_natural?.slice(-10) }}
+                                        </td>
+                                        <td>{{ s.cut_ip_long }}</td>
+                                        <td :style="{color: s.cntl_valid<=3?'var(--accent-red)':'inherit'}">{{
+                                            s.cntl_valid }}</td>
+                                        <td :style="{color: s.cntr_valid<=3?'var(--accent-red)':'inherit'}">{{
+                                            s.cntr_valid }}</td>
+                                        <td :style="{color: s.cv_margin<0.02?'var(--accent-yellow)':'inherit'}">{{
+                                            s.cv_margin }}</td>
+                                        <td>{{ s.ratio_report }}</td>
+                                        <td>{{ s.opl?.slice(0,8) }}</td>
+                                        <td>{{ s.opr?.slice(0,8) }}</td>
+                                        <td>{{ s.network_tier_pre }}</td>
+                                        <td>{{ s.simple_score }}</td>
+                                        <td><button class="btn" style="padding:2px 8px;font-size:0.7rem"
+                                                @click="jumpToExplorer(s.cut_ip_long)">🔍</button></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- What-If wD Experiment -->
+                    <div class="panel" style="margin-top:1rem">
+                        <div class="panel-header">
+                            <h3>🧪 wD what-if 实验</h3>
+                        </div>
+                        <div class="panel-body">
+                            <p style="color:var(--text-secondary);font-size:0.8rem;margin-bottom:0.8rem">调整 wD 权重分段查看对 H
+                                库的影响预测。当前 density=30 处 wD 从 4 跳到 16，是 tier 漂移主因。</p>
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+                                <div v-for="(bin, i) in wdBins" :key="i"
+                                    style="display:flex;gap:4px;align-items:center;font-size:0.75rem">
+                                    <span style="color:var(--text-secondary)">{{ bin.gt }}&lt;d≤</span>
+                                    <input type="number" v-model.number="bin.lte"
+                                        style="width:60px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:2px 4px;font-size:0.75rem">
+                                    <span style="color:var(--text-secondary)">→wD=</span>
+                                    <input type="number" v-model.number="bin.wd"
+                                        style="width:45px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);padding:2px 4px;font-size:0.75rem">
+                                </div>
+                                <button class="btn" style="padding:4px 16px" @click="runWdWhatIf()"
+                                    :disabled="wdLoading">{{ wdLoading ? '计算中...' : '▶ 运行评估' }}</button>
+                                <button class="btn" style="padding:4px 12px;opacity:0.6"
+                                    @click="resetWdBins()">重置</button>
+                            </div>
+
+                            <template v-if="wdResult">
+                                <div class="grid-3" style="margin-top:1rem">
+                                    <div class="kpi-card"
+                                        :style="{borderLeft: wdResult.summary.delta_h_blocks > 0 ? '3px solid var(--accent-green)' : wdResult.summary.delta_h_blocks < 0 ? '3px solid var(--accent-red)' : ''}">
+                                        <div class="kpi-label">H 块数变化</div>
+                                        <div class="kpi-value">{{ wdResult.summary.delta_h_blocks > 0 ? '+' : '' }}{{
+                                            formatNum(wdResult.summary.delta_h_blocks) }}</div>
+                                        <div class="kpi-sub">{{ formatNum(wdResult.summary.old_h_blocks) }} → {{
+                                            formatNum(wdResult.summary.new_h_blocks) }}</div>
+                                    </div>
+                                    <div class="kpi-card"
+                                        :style="{borderLeft: wdResult.summary.delta_h_members > 0 ? '3px solid var(--accent-green)' : wdResult.summary.delta_h_members < 0 ? '3px solid var(--accent-red)' : ''}">
+                                        <div class="kpi-label">H 成员数变化</div>
+                                        <div class="kpi-value">{{ wdResult.summary.delta_h_members > 0 ? '+' : '' }}{{
+                                            formatNum(wdResult.summary.delta_h_members) }}</div>
+                                        <div class="kpi-sub">{{ formatNum(wdResult.summary.old_h_members) }} → {{
+                                            formatNum(wdResult.summary.new_h_members) }}</div>
+                                    </div>
+                                    <div class="kpi-card">
+                                        <div class="kpi-label">Tier 迁移事件</div>
+                                        <div class="kpi-value">{{ wdResult.tier_migration.length }}</div>
+                                        <div class="kpi-sub">类迁移路径</div>
+                                    </div>
+                                </div>
+
+                                <div class="grid-2" style="margin-top:0.8rem" v-if="wdResult.tier_migration.length">
+                                    <div>
+                                        <h4 style="color:var(--text-secondary);font-size:0.8rem;margin-bottom:0.5rem">
+                                            Tier 迁移路径</h4>
+                                        <table class="compare-table" style="font-size:0.72rem">
+                                            <thead>
+                                                <tr>
+                                                    <th>迁移方向</th>
+                                                    <th>块数</th>
+                                                    <th>成员数</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="m in wdResult.tier_migration.slice(0,10)"
+                                                    :key="m.transition">
+                                                    <td>{{ m.transition }}</td>
+                                                    <td>{{ formatNum(m.blocks) }}</td>
+                                                    <td>{{ formatNum(m.members) }}</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div>
+                                        <h4 style="color:var(--accent-green);font-size:0.8rem;margin-bottom:0.5rem"
+                                            v-if="wdResult.gained_top20.length">新进入 H (Top{{
+                                            wdResult.gained_top20.length }})</h4>
+                                        <table class="compare-table" style="font-size:0.72rem"
+                                            v-if="wdResult.gained_top20.length">
+                                            <thead>
+                                                <tr>
+                                                    <th>density</th>
+                                                    <th>旧score</th>
+                                                    <th>新score</th>
+                                                    <th>成员</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="g in wdResult.gained_top20.slice(0,8)" :key="g.block_id">
+                                                    <td>{{ Number(g.density).toFixed(1) }}</td>
+                                                    <td>{{ g.old_score }} ({{ g.old_tier }})</td>
+                                                    <td style="color:var(--accent-green)">{{ g.new_score }}</td>
+                                                    <td>{{ formatNum(g.members) }}</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                        <h4 style="color:var(--accent-red);font-size:0.8rem;margin:0.5rem 0"
+                                            v-if="wdResult.lost_top20.length">离开 H (Top{{ wdResult.lost_top20.length }})
+                                        </h4>
+                                        <table class="compare-table" style="font-size:0.72rem"
+                                            v-if="wdResult.lost_top20.length">
+                                            <thead>
+                                                <tr>
+                                                    <th>density</th>
+                                                    <th>旧score</th>
+                                                    <th>新score</th>
+                                                    <th>成员</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="l in wdResult.lost_top20.slice(0,8)" :key="l.block_id">
+                                                    <td>{{ Number(l.density).toFixed(1) }}</td>
+                                                    <td>{{ l.old_score }}</td>
+                                                    <td style="color:var(--accent-red)">{{ l.new_score }} ({{ l.new_tier
+                                                        }})</td>
+                                                    <td>{{ formatNum(l.members) }}</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- ── Samples ── -->
+                <template v-if="labSub==='samples'">
+                    <div style="display:flex;gap:8px;margin-bottom:1rem">
+                        <button class="btn" :class="{active:sampleZone==='boundary'}"
+                            @click="sampleZone='boundary';loadSamples()">🎯 边界带</button>
+                        <button class="btn" :class="{active:sampleZone==='split'}"
+                            @click="sampleZone='split';loadSamples()" v-if="labLib==='h'">✂️ 切分块</button>
+                        <button class="btn" :class="{active:sampleZone==='random'}"
+                            @click="sampleZone='random';loadSamples()">🎲 随机</button>
+                    </div>
+                    <div class="panel" v-if="labSamples.length">
+                        <div class="panel-header">
+                            <h3>🧬 样本篮 ({{ labSamples.length }}) — 点击跳转 Explorer</h3>
+                        </div>
+                        <div class="panel-body" style="overflow-x:auto">
+                            <table class="compare-table" style="font-size:0.75rem">
+                                <thead>
+                                    <tr>
+                                        <th>IP</th>
+                                        <th>ip_long</th>
+                                        <th>运营商</th>
+                                        <th>上报</th>
+                                        <th>设备</th>
+                                        <th v-if="labLib==='h'">score</th>
+                                        <th v-if="labLib==='h'">density</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="s in labSamples" :key="s.ip_long" style="cursor:pointer"
+                                        @click="jumpToExplorer(s.ip_long)">
+                                        <td style="font-family:var(--font-mono)">{{ s.ip_address }}</td>
+                                        <td>{{ s.ip_long }}</td>
+                                        <td>{{ s.operator?.slice(0,12) }}</td>
+                                        <td>{{ s.reports }}</td>
+                                        <td>{{ s.devices }}</td>
+                                        <td v-if="labLib==='h'">{{ s.simple_score }}</td>
+                                        <td v-if="labLib==='h'">{{ s.density }}</td>
+                                        <td><button class="btn" style="padding:2px 8px;font-size:0.7rem">🔍</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-else class="empty-state">
+                        <div class="empty-icon">🧬</div>
+                        <div class="empty-text">点击按钮获取样本</div>
+                    </div>
+                </template>
+
+                <div v-if="labLoading" class="loading-container">
+                    <div class="spinner"></div>
+                </div>
+            </template>
+        </main>
+
+        <!-- ─── Tooltip ─── -->
+        <div class="tooltip" v-if="tooltip.visible" :style="{left: tooltip.x + 'px', top: tooltip.y + 'px'}">
+            <div class="tt-title">Shard {{ tooltip.data?.shard_id }}</div>
+            <div class="tt-row"><span class="tt-label">IP范围起</span><span class="tt-value">{{ tooltip.data?.ip_long_start
+                    }}</span></div>
+            <div class="tt-row"><span class="tt-label">IP范围止</span><span class="tt-value">{{ tooltip.data?.ip_long_end
+                    }}</span></div>
+            <div class="tt-row"><span class="tt-label">预估行数</span><span class="tt-value">{{
+                    formatNum(tooltip.data?.est_rows) }}</span></div>
+            <div class="tt-row"><span class="tt-label">源成员</span><span class="tt-value">{{
+                    formatNum(tooltip.data?.source_members_cnt) }}</span></div>
+            <div class="tt-row"><span class="tt-label">自然块</span><span class="tt-value">{{
+                    formatNum(tooltip.data?.block_natural_cnt) }}</span></div>
+            <div class="tt-row"><span class="tt-label">最终块</span><span class="tt-value">{{
+                    formatNum(tooltip.data?.block_final_cnt) }}</span></div>
+            <div class="tt-row"><span class="tt-label">阶段完成</span><span class="tt-value">{{
+                    tooltip.data?.phases_completed }}/7</span></div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, nextTick } = Vue;
+
+        const API = '';  // Same origin
+
+        createApp({
+            setup() {
+                // ── State ──
+                const currentTab = ref('dashboard');
+                const loading = ref(true);
+                const runs = ref([]);
+                const selectedRunId = ref('');
+                const overview = ref({});
+                const shards = ref([]);
+                const qaResults = ref([]);
+                const tierDist = ref([]);
+                const searchQuery = ref('');
+                const searchLoading = ref(false);
+                const traceResult = ref(null);
+                const tooltip = ref({ visible: false, x: 0, y: 0, data: null });
+
+                // ── Computed ──
+                const allQAPassed = computed(() =>
+                    qaResults.value.length > 0 && qaResults.value.every(q => q.pass_flag)
+                );
+
+                const conservationDiff = computed(() => {
+                    const o = overview.value;
+                    if (!o.keep_members_cnt) return null;
+                    return o.keep_members_cnt - (o.h_members_cnt + o.e_members_cnt + o.f_members_cnt);
+                });
+
+                // ── Load ──
+                async function loadRuns() {
+                    try {
+                        const res = await fetch(`${API}/api/dashboard/runs`);
+                        runs.value = await res.json();
+                        if (runs.value.length > 0) {
+                            selectedRunId.value = runs.value[0].run_id;
+                            await loadRunData();
+                        }
+                    } catch (e) {
+                        console.error('Failed to load runs:', e);
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+
+                async function loadRunData() {
+                    if (!selectedRunId.value) return;
+                    loading.value = true;
+                    try {
+                        const [ovRes, shRes, qaRes, tdRes] = await Promise.all([
+                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/overview`),
+                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/shards`),
+                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/qa`),
+                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/network-tier-distribution`),
+                        ]);
+                        overview.value = await ovRes.json();
+                        shards.value = await shRes.json();
+                        qaResults.value = await qaRes.json();
+                        tierDist.value = await tdRes.json();
+                    } catch (e) {
+                        console.error('Failed to load run data:', e);
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+
+                // ── Search ──
+                async function doSearch() {
+                    const q = searchQuery.value.trim();
+                    if (!q) return;
+                    searchLoading.value = true;
+                    traceResult.value = null;
+                    try {
+                        let url;
+                        if (/^\d+$/.test(q)) {
+                            url = `${API}/api/explore/ip-long/${q}?run_id=${selectedRunId.value}`;
+                        } else if (/^\d+\.\d+\.\d+\.\d+$/.test(q)) {
+                            url = `${API}/api/explore/ip/${q}?run_id=${selectedRunId.value}`;
+                        } else {
+                            url = `${API}/api/explore/block/${q}?run_id=${selectedRunId.value}`;
+                        }
+                        const res = await fetch(url);
+                        if (res.ok) {
+                            traceResult.value = await res.json();
+                        } else {
+                            const err = await res.json();
+                            alert(err.detail || '未找到');
+                        }
+                    } catch (e) {
+                        console.error('Search failed:', e);
+                    } finally {
+                        searchLoading.value = false;
+                    }
+                }
+
+                // ── Helpers ──
+                function formatNum(n) {
+                    if (n == null) return '—';
+                    if (typeof n === 'number') {
+                        if (n >= 1e7) return (n / 1e6).toFixed(1) + 'M';
+                        if (n >= 1e4) return (n / 1e4).toFixed(1) + '万';
+                        return n.toLocaleString('zh-CN');
+                    }
+                    return String(n);
+                }
+
+                function pct(part, total) {
+                    if (!total || !part) return '0%';
+                    return (part / total * 100).toFixed(1) + '%';
+                }
+
+                function shardStatusClass(s) {
+                    if (s.phases_completed >= 7) return 'status-complete';
+                    if (s.phases_completed > 0) return 'status-partial';
+                    if (s.source_members_cnt === 0) return 'status-empty';
+                    return 'status-error';
+                }
+
+                function tierColor(tier) {
+                    const m = {
+                        '超大网络': '#f85149',
+                        '大型网络': '#f0883e',
+                        '中型网络': '#d29922',
+                        '小型网络': '#58a6ff',
+                        '微型网络': '#bc8cff',
+                        '无效块': '#6e7681',
+                    };
+                    return m[tier] || 'var(--text-secondary)';
+                }
+
+                function tierPct(count) {
+                    const max = Math.max(...tierDist.value.map(t => t.block_count), 1);
+                    return (count / max * 100);
+                }
+
+                function classIcon(cls) {
+                    const m = { 'H': '🟠', 'E': '🟣', 'F': '🟢', 'Drop': '🔴' };
+                    return m[cls] || '⚪';
+                }
+
+                function formatQAName(name) {
+                    const m = {
+                        'no_overlap_h_e': 'H∩E=∅ 互斥检查',
+                        'no_overlap_h_f': 'H∩F=∅ 互斥检查',
+                        'no_overlap_e_f': 'E∩F=∅ 互斥检查',
+                        'conservation_keep_equals_hef': 'Keep=H∪E∪F 守恒检查',
+                        'no_ghost_hef_outside_source': '无幽灵成员检查',
+                        'drop_members_have_natural_map': 'Drop成员映射检查',
+                        'h_excludes_invalid_tier': 'H排除无效块检查',
+                        'f_excludes_e_atoms': 'F排除E原子检查',
+                        'split_events_include_cnt0': '切分事件cnt=0审计',
+                        'shard_plan_matches_shard_cnt': 'ShardPlan连续性检查',
+                        'per_shard_outputs_complete': 'Per-Shard全覆盖检查',
+                    };
+                    return m[name] || name;
+                }
+
+                function qaDescription(name) {
+                    const d = {
+                        'no_overlap_h_e': 'H库和E库不能有重叠IP，同一个IP只能属于一个库',
+                        'no_overlap_h_f': 'H库和F库不能有重叠IP',
+                        'no_overlap_e_f': 'E库和F库不能有重叠IP',
+                        'conservation_keep_equals_hef': 'Keep集合必须等于H+E+F的并集，不能多也不能少',
+                        'no_ghost_hef_outside_source': 'H/E/F中的所有IP必须来自源成员表，不允许凭空出现',
+                        'drop_members_have_natural_map': '被Drop的成员必须能找到对应的自然块映射',
+                        'h_excludes_invalid_tier': 'H库中不能包含非"中型网络"级别的块',
+                        'f_excludes_e_atoms': 'F库成员不能出现在E库的/27原子中',
+                        'split_events_include_cnt0': '切分事件表中cnt=0的记录数审计（用于跟踪边界情况）',
+                        'shard_plan_matches_shard_cnt': '分片计划的Shard数量必须连续且完整(0~64)',
+                        'per_shard_outputs_complete': '每个Shard的所有Pipeline阶段输出必须完整',
+                    };
+                    return d[name] || '';
+                }
+
+                function showShardTooltip(event, shard) {
+                    tooltip.value = {
+                        visible: true,
+                        x: event.clientX + 12,
+                        y: event.clientY + 12,
+                        data: shard
+                    };
+                }
+
+                function hideTooltip() {
+                    tooltip.value.visible = false;
+                }
+
+                function viewShardDetail(s) {
+                    // TODO: navigate to shard detail view
+                    console.log('View shard', s.shard_id);
+                }
+
+                // ── Lab State ──
+                const labLib = ref('h');
+                const labSub = ref('overview');
+                const labOverview = ref({});
+                const labIssues = ref([]);
+                const labLoading = ref(false);
+                const _charts = {};
+
+                function _ec(id) {
+                    if (_charts[id]) { _charts[id].dispose(); }
+                    const el = document.getElementById(id);
+                    if (!el) return null;
+                    _charts[id] = echarts.init(el, 'dark');
+                    return _charts[id];
+                }
+                const LIB_COLORS = { h: '#f0883e', e: '#bc8cff', f: '#39d2c0' };
+
+                async function initLab() {
+                    if (labOverview.value.run_id) return;
+                    await loadLabData();
+                }
+
+                async function loadLabData() {
+                    labLoading.value = true;
+                    try {
+                        const rid = selectedRunId.value;
+                        const [ovRes, topRes] = await Promise.all([
+                            fetch(`${API}/api/research/runs/${rid}/libraries/overview`),
+                            fetch(`${API}/api/research/runs/${rid}/library/${labLib.value}/top?field=operator&limit=5`),
+                        ]);
+                        labOverview.value = await ovRes.json();
+                        const topData = await topRes.json();
+                        labOverview.value._topOp = topData.items || [];
+                        await nextTick();
+                        renderOverviewCharts();
+                    } catch (e) { console.error('Lab load failed:', e); }
+                    finally { labLoading.value = false; }
+                }
+
+                function renderOverviewCharts() {
+                    const f = labOverview.value.funnel;
+                    if (!f) return;
+                    // Funnel
+                    const fc = _ec('chart-funnel');
+                    if (fc) fc.setOption({
+                        backgroundColor: 'transparent',
+                        tooltip: { trigger: 'item', formatter: '{b}: {c}' },
+                        series: [{
+                            type: 'funnel', left: 10, right: 10, top: 10, bottom: 10, minSize: '5%',
+                            label: { show: true, fontSize: 12 },
+                            data: [
+                                { value: f.source_total, name: 'Source' },
+                                { value: f.keep_total, name: 'Keep' },
+                                { value: f.h_total + f.e_total, name: 'H+E' },
+                                { value: f.h_total, name: 'H 库', itemStyle: { color: '#f0883e' } },
+                                { value: f.e_total, name: 'E 库', itemStyle: { color: '#bc8cff' } },
+                                { value: f.f_total, name: 'F 库', itemStyle: { color: '#39d2c0' } },
+                            ].sort((a, b) => b.value - a.value)
+                        }]
+                    });
+                    // Operator Pie
+                    const ops = labOverview.value._topOp || [];
+                    const pc = _ec('chart-operator');
+                    if (pc && ops.length) pc.setOption({
+                        backgroundColor: 'transparent',
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie', radius: ['35%', '70%'], center: ['50%', '55%'],
+                            label: { show: true, fontSize: 11, color: '#8b949e' },
+                            data: ops.map(o => ({ value: o.cnt, name: o.label })),
+                            itemStyle: { borderRadius: 4, borderColor: '#161b22', borderWidth: 2 }
+                        }]
+                    });
+                }
+
+                async function renderProfileCharts() {
+                    labLoading.value = true;
+                    const rid = selectedRunId.value, lib = labLib.value;
+                    try {
+                        const [rptRes, devRes, opRes, exRes] = await Promise.all([
+                            fetch(`${API}/api/research/runs/${rid}/library/${lib}/distribution?field=reports&bins=25`),
+                            fetch(`${API}/api/research/runs/${rid}/library/${lib}/distribution?field=devices&bins=25`),
+                            fetch(`${API}/api/research/runs/${rid}/library/${lib}/top?field=operator&limit=15`),
+                            fetch(`${API}/api/research/runs/${rid}/library/${lib}/distribution?field=${lib === 'h' ? 'simple_score' : 'mobile_ratio'}&bins=20`),
+                        ]);
+                        const rpt = await rptRes.json(), dev = await devRes.json();
+                        const op = await opRes.json(), ex = await exRes.json();
+                        await nextTick();
+                        const clr = LIB_COLORS[lib];
+                        // Reports histogram
+                        const rc = _ec('chart-reports');
+                        if (rc && rpt.bins) rc.setOption({
+                            backgroundColor: 'transparent', tooltip: { trigger: 'axis' },
+                            xAxis: { type: 'category', data: rpt.bins.map(b => b.bin_start), axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            series: [{ type: 'bar', data: rpt.bins.map(b => b.cnt), itemStyle: { color: clr, borderRadius: [3, 3, 0, 0] } }],
+                            dataZoom: [{ type: 'inside' }]
+                        });
+                        // Devices histogram
+                        const dc = _ec('chart-devices');
+                        if (dc && dev.bins) dc.setOption({
+                            backgroundColor: 'transparent', tooltip: { trigger: 'axis' },
+                            xAxis: { type: 'category', data: dev.bins.map(b => b.bin_start), axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            series: [{ type: 'bar', data: dev.bins.map(b => b.cnt), itemStyle: { color: clr, borderRadius: [3, 3, 0, 0] } }],
+                            dataZoom: [{ type: 'inside' }]
+                        });
+                        // Operator bar
+                        const oc = _ec('chart-op-bar');
+                        if (oc && op.items) oc.setOption({
+                            backgroundColor: 'transparent', tooltip: { trigger: 'axis' },
+                            xAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            yAxis: { type: 'category', data: op.items.map(o => o.label).reverse(), axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            series: [{ type: 'bar', data: op.items.map(o => o.cnt).reverse(), itemStyle: { color: clr, borderRadius: [0, 3, 3, 0] } }],
+                            grid: { left: 100 }
+                        });
+                        // Extra chart
+                        const xc = _ec('chart-extra');
+                        if (xc && ex.bins) xc.setOption({
+                            backgroundColor: 'transparent', tooltip: { trigger: 'axis' },
+                            xAxis: { type: 'category', data: ex.bins.map(b => b.bin_start || b.value), axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#8b949e' } },
+                            series: [{ type: 'bar', data: ex.bins.map(b => b.cnt), itemStyle: { color: clr, borderRadius: [3, 3, 0, 0] } }],
+                            dataZoom: [{ type: 'inside' }]
+                        });
+
+                        // Load and render H-specific charts
+                        if (lib === 'h') {
+                            const [scatterRes, boxplotRes] = await Promise.all([
+                                fetch(`${API}/api/research/runs/${rid}/h/block-scatter?sample=500`),
+                                fetch(`${API}/api/research/runs/${rid}/h/operator-boxplot?field=density&top=5`),
+                            ]);
+                            const scatter = await scatterRes.json();
+                            const boxplot = await boxplotRes.json();
+
+                            // Scatter plot: valid_cnt vs density
+                            const scc = _ec('chart-scatter');
+                            if (scc && scatter.data) {
+                                scc.setOption({
+                                    backgroundColor: 'transparent',
+                                    tooltip: {
+                                        formatter: p => `Block: ${p.data[4]}<br/>Density: ${p.data[0]}<br/>Valid Cnt: ${p.data[1]}<br/>Score: ${p.data[3]}`
+                                    },
+                                    xAxis: { type: 'value', name: 'Density', axisLabel: { fontSize: 10, color: '#8b949e' }, min: 0 },
+                                    yAxis: { type: 'value', name: 'Valid Cnt', axisLabel: { fontSize: 10, color: '#8b949e' } },
+                                    series: [{
+                                        type: 'scatter',
+                                        symbolSize: val => Math.max(Math.sqrt(val[2]) * 2, 4),
+                                        data: scatter.data.map(d => [d.density, d.valid_cnt, d.member_cnt_total, d.simple_score, d.block_id_final]),
+                                        itemStyle: { color: '#f0883e', opacity: 0.6 }
+                                    }],
+                                    dataZoom: [{ type: 'inside' }, { type: 'inside', yAxisIndex: 0 }]
+                                });
+                            }
+
+                            // Boxplot: density by operator
+                            const bc = _ec('chart-boxplot');
+                            if (bc && boxplot.data) {
+                                bc.setOption({
+                                    backgroundColor: 'transparent',
+                                    tooltip: { trigger: 'item', formatter: p => `${p.name}<br/>Min: ${p.data[1]}<br/>Q1: ${p.data[2]}<br/>Median: ${p.data[3]}<br/>Q3: ${p.data[4]}<br/>Max: ${p.data[5]}` },
+                                    xAxis: { type: 'category', data: boxplot.data.map(d => d.operator), axisLabel: { fontSize: 10, color: '#8b949e', interval: 0, rotate: 15 } },
+                                    yAxis: { type: 'value', name: 'Density', axisLabel: { fontSize: 10, color: '#8b949e' } },
+                                    series: [{
+                                        type: 'boxplot',
+                                        data: boxplot.data.map(d => [d.min, d.q1, d.median, d.q3, d.max]),
+                                        itemStyle: { color: '#f0883e', borderColor: '#f0883e' }
+                                    }]
+                                });
+                            }
+                        }
+                    } catch (e) { console.error(e); }
+                    finally { labLoading.value = false; }
+                }
+
+                async function renderFlowCharts() {
+                    labLoading.value = true;
+                    const rid = selectedRunId.value, lib = labLib.value;
+                    try {
+                        const [funnelRes, sankeyRes] = await Promise.all([
+                            fetch(`${API}/api/research/runs/${rid}/flow/global-funnel`),
+                            fetch(`${API}/api/research/runs/${rid}/library/${lib}/flow/sankey`),
+                        ]);
+                        const funnel = await funnelRes.json(), sankey = await sankeyRes.json();
+                        await nextTick();
+                        // Flow Funnel
+                        const fc = _ec('chart-flow-funnel');
+                        if (fc) fc.setOption({
+                            backgroundColor: 'transparent', tooltip: { trigger: 'item' },
+                            series: [{
+                                type: 'funnel', left: 20, right: 20, top: 20, bottom: 20, minSize: '8%',
+                                label: { show: true, fontSize: 12 },
+                                data: [
+                                    { value: funnel.source_total, name: `Source (${formatNum(funnel.source_total)})` },
+                                    { value: funnel.keep_total, name: `Keep (${formatNum(funnel.keep_total)})` },
+                                    { value: funnel.r1_total, name: `R1 (${formatNum(funnel.r1_total)})` },
+                                    { value: funnel.e_total, name: `E (${formatNum(funnel.e_total)})`, itemStyle: { color: '#bc8cff' } },
+                                    { value: funnel.h_total, name: `H (${formatNum(funnel.h_total)})`, itemStyle: { color: '#f0883e' } },
+                                    { value: funnel.f_total, name: `F (${formatNum(funnel.f_total)})`, itemStyle: { color: '#39d2c0' } },
+                                ].sort((a, b) => b.value - a.value)
+                            }]
+                        });
+                        // Sankey / breakdown
+                        const sc = _ec('chart-flow-sankey');
+                        if (sc && sankey.data) {
+                            if (sankey.type === 'tier_drift') {
+                                // H: tier migration as heatmap-like bar
+                                const groups = {};
+                                sankey.data.forEach(r => {
+                                    const key = r.tier_pre + ' → ' + r.split_status;
+                                    if (!groups[key]) groups[key] = { blocks: 0, members: 0 };
+                                    groups[key].blocks += r.block_cnt;
+                                    groups[key].members += r.member_cnt;
+                                });
+                                const labels = Object.keys(groups);
+                                sc.setOption({
+                                    backgroundColor: 'transparent', tooltip: { trigger: 'axis' },
+                                    xAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#8b949e' } },
+                                    yAxis: { type: 'category', data: labels, axisLabel: { fontSize: 10, color: '#8b949e' } },
+                                    series: [
+                                        { type: 'bar', name: 'Blocks', data: labels.map(l => groups[l].blocks), itemStyle: { color: '#f0883e', borderRadius: [0, 3, 3, 0] } },
+                                    ],
+                                    grid: { left: 180 }
+                                });
+                            } else {
+                                // E/F: density/run breakdown as stacked bar
+                                sc.setOption({
+                                    backgroundColor: 'transparent', tooltip: { trigger: 'item' },
+                                    series: [{
+                                        type: 'pie', radius: ['30%', '65%'],
+                                        label: { show: true, fontSize: 11, color: '#8b949e', formatter: '{b}\n{c}' },
+                                        data: sankey.data.map(r => ({
+                                            value: r.atom_cnt,
+                                            name: (r.density_pass ? '密度✓' : '密度✗') + '/' + (r.run_pass ? 'Run✓' : 'Run✗'),
+                                        })),
+                                        itemStyle: { borderRadius: 4, borderColor: '#161b22', borderWidth: 2 }
+                                    }]
+                                });
+                            }
+                        }
+                    } catch (e) { console.error(e); }
+                    finally { labLoading.value = false; }
+                }
+
+                const selectedIssueIdx = ref(null);
+
+                async function loadIssues() {
+                    labLoading.value = true;
+                    try {
+                        const res = await fetch(`${API}/api/research/runs/${selectedRunId.value}/library/${labLib.value}/issues`);
+                        const data = await res.json();
+                        labIssues.value = data.issues || [];
+                    } catch (e) { console.error(e); }
+                    finally { labLoading.value = false; }
+                }
+
+                // ── Phase 2: Deep Analysis ──
+                const labDeep = ref({});
+                const labSamples = ref([]);
+                const sampleZone = ref('boundary');
+
+                async function loadDeepAnalysis() {
+                    labLoading.value = true;
+                    const rid = selectedRunId.value;
+                    try {
+                        const [splitRes, driftRes, suspRes] = await Promise.all([
+                            fetch(`${API}/api/research/runs/${rid}/h/split-analysis`),
+                            fetch(`${API}/api/research/runs/${rid}/h/tier-drift`),
+                            fetch(`${API}/api/research/runs/${rid}/h/suspicious-splits?limit=30`),
+                        ]);
+                        const split = await splitRes.json();
+                        const drift = await driftRes.json();
+                        const susp = await suspRes.json();
+                        labDeep.value = {
+                            ...split,
+                            drift: drift,
+                            suspicious: susp.suspicious_splits || [],
+                        };
+                        await nextTick();
+                        renderDeepCharts(drift, split);
+                    } catch (e) { console.error(e); }
+                    finally { labLoading.value = false; }
+                }
+
+                function renderDeepCharts(drift, split) {
+                    // Tier Drift Heatmap
+                    const hc = _ec('chart-tier-drift');
+                    if (hc && drift.matrix) {
+                        const pre = drift.pre_tiers;
+                        const fin = drift.final_tiers;
+                        const data = drift.matrix.map(r => [
+                            fin.indexOf(r.tier_final),
+                            pre.indexOf(r.tier_pre),
+                            Number(r.block_cnt)
+                        ]);
+                        const maxVal = Math.max(...data.map(d => d[2]), 1);
+                        hc.setOption({
+                            backgroundColor: 'transparent',
+                            tooltip: {
+                                formatter: p => {
+                                    const r = drift.matrix.find(m =>
+                                        fin.indexOf(m.tier_final) === p.data[0] &&
+                                        pre.indexOf(m.tier_pre) === p.data[1]
+                                    );
+                                    return r ? `${r.tier_pre} → ${r.tier_final}<br/>Blocks: ${formatNum(r.block_cnt)}<br/>Members: ${formatNum(r.member_cnt)}` : '';
+                                }
+                            },
+                            xAxis: { type: 'category', data: fin, axisLabel: { fontSize: 10, color: '#8b949e', rotate: 30 }, name: 'Final Tier' },
+                            yAxis: { type: 'category', data: pre, axisLabel: { fontSize: 10, color: '#8b949e' }, name: 'Pre Tier' },
+                            visualMap: { min: 0, max: maxVal, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, inRange: { color: ['#161b22', '#1f6feb', '#f0883e', '#da3633'] }, textStyle: { color: '#8b949e' }, show: false },
+                            series: [{ type: 'heatmap', data: data, label: { show: true, fontSize: 10, formatter: p => formatNum(p.data[2]) }, itemStyle: { borderColor: '#161b22', borderWidth: 1 } }],
+                            grid: { left: 80, right: 20, top: 20, bottom: 40 }
+                        });
+                    }
+
+                    // Trigger Pie
+                    const tc = _ec('chart-triggers');
+                    if (tc && split.triggers) {
+                        const triggerData = split.triggers.map(t => {
+                            const labels = [];
+                            if (t.trigger_report) labels.push('Report');
+                            if (t.trigger_mobile) labels.push('Mobile');
+                            if (t.trigger_operator) labels.push('Operator');
+                            return { value: t.event_cnt, name: labels.join('+') || 'None' };
+                        });
+                        tc.setOption({
+                            backgroundColor: 'transparent',
+                            tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                            legend: { bottom: 0, textStyle: { color: '#8b949e', fontSize: 11 } },
+                            series: [{
+                                type: 'pie', radius: ['30%', '65%'], center: ['50%', '45%'],
+                                label: { show: true, fontSize: 11, color: '#8b949e', formatter: '{b}\n{d}%' },
+                                data: triggerData,
+                                itemStyle: { borderRadius: 4, borderColor: '#161b22', borderWidth: 2 },
+                                emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0 } }
+                            }]
+                        });
+                    }
+                }
+
+                async function loadSamples() {
+                    labLoading.value = true;
+                    try {
+                        const res = await fetch(`${API}/api/research/runs/${selectedRunId.value}/library/${labLib.value}/samples?zone=${sampleZone.value}&limit=20`);
+                        const data = await res.json();
+                        labSamples.value = data.samples || [];
+                    } catch (e) { console.error(e); }
+                    finally { labLoading.value = false; }
+                }
+
+                function jumpToExplorer(ipLong) {
+                    currentTab.value = 'explorer';
+                    searchQuery.value = String(ipLong);
+                    nextTick(() => doSearch());
+                }
+
+                // ── Phase 3A: What-If E-Threshold ──
+                const eThresholds = ref({ min_valid_cnt: 7, min_run_len: 3 });
+                const eLoading = ref(false);
+                const eResult = ref(null);
+
+                async function runEWhatIf() {
+                    eLoading.value = true;
+                    try {
+                        const res = await fetch(`${API}/api/research/runs/${selectedRunId.value}/experiments/whatif-e`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(eThresholds.value)
+                        });
+                        eResult.value = await res.json();
+                    } catch (e) {
+                        alert('E 阈值实验执行失败');
+                        console.error(e);
+                    } finally {
+                        eLoading.value = false;
+                    }
+                }
+
+                // ── Phase 3C: E Suspicious and F Opportunity ──
+                const eSuspicious = ref([]);
+                const fOpportunities = ref([]);
+
+                // ── Phase 3B: RulePack ──
+                const rulePacks = ref([]);
+                const showCreateRulePack = ref(false);
+                const rulePacksLoading = ref(false);
+                const rulePackSaving = ref(false);
+                const rulePackError = ref("");
+                const newRulePack = ref({
+                    name: "", description: "", rules_json_str: '[\n  {"metric": "density", "op": ">=", "val": 30}\n]'
+                });
+
+                async function loadRulePacks() {
+                    rulePacksLoading.value = true;
+                    try {
+                        const res = await fetch(`${API}/api/rules/?target_lib=${labLib.value.toUpperCase()}`);
+                        const data = await res.json();
+                        rulePacks.value = data.data || [];
+                    } catch (e) { console.error(e); }
+                    finally { rulePacksLoading.value = false; }
+                }
+
+                async function saveRulePack() {
+                    rulePackError.value = "";
+                    let rules_json;
+                    try {
+                        rules_json = JSON.parse(newRulePack.value.rules_json_str);
+                    } catch (e) {
+                        rulePackError.value = "JSON 格式错误，请检查。";
+                        return;
+                    }
+                    rulePackSaving.value = true;
+                    try {
+                        const payload = {
+                            name: newRulePack.value.name,
+                            description: newRulePack.value.description,
+                            target_lib: labLib.value.toUpperCase(),
+                            rules_json: rules_json
+                        };
+                        const res = await fetch(`${API}/api/rules/`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const result = await res.json();
+                        if (result.success) {
+                            showCreateRulePack.value = false;
+                            newRulePack.value.name = "";
+                            newRulePack.value.description = "";
+                            loadRulePacks();
+                        } else {
+                            rulePackError.value = result.error || "保存失败";
+                        }
+                    } catch (e) {
+                        rulePackError.value = e.message;
+                    } finally {
+                        rulePackSaving.value = false;
+                    }
+                }
+
+                async function deleteRulePack(id) {
+                    if (!confirm("确定要删除此规则包吗?")) return;
+                    try {
+                        await fetch(`${API}/api/rules/${id}`, { method: 'DELETE' });
+                        loadRulePacks();
+                    } catch (e) { console.error(e); }
+                }
+
+                // ── Phase 3A: What-If wD ──
+                const WD_DEFAULT = [
+                    { gt: 0, lte: 3.5, wd: 1 },
+                    { gt: 3.5, lte: 6.5, wd: 2 },
+                    { gt: 6.5, lte: 30, wd: 4 },
+                    { gt: 30, lte: 200, wd: 16 },
+                    { gt: 200, lte: 999999, wd: 32 },
+                ];
+                const wdBins = ref(JSON.parse(JSON.stringify(WD_DEFAULT)));
+                const wdLoading = ref(false);
+                const wdResult = ref(null);
+
+                function resetWdBins() {
+                    wdBins.value = JSON.parse(JSON.stringify(WD_DEFAULT));
+                    wdResult.value = null;
+                }
+
+                async function runWdWhatIf() {
+                    wdLoading.value = true;
+                    wdResult.value = null;
+                    try {
+                        const res = await fetch(`${API}/api/research/runs/${selectedRunId.value}/experiments/whatif-wd`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ wd_bins: wdBins.value }),
+                        });
+                        wdResult.value = await res.json();
+                    } catch (e) { console.error(e); }
+                    finally { wdLoading.value = false; }
+                }
+
+                // ── Mount ──
+                onMounted(loadRuns);
+
+                return {
+                    currentTab, loading, runs, selectedRunId, overview, shards,
+                    qaResults, tierDist, searchQuery, searchLoading, traceResult,
+                    tooltip, allQAPassed, conservationDiff,
+                    loadRunData, doSearch, formatNum, pct, shardStatusClass,
+                    tierColor, tierPct, classIcon, formatQAName, qaDescription,
+                    showShardTooltip, hideTooltip, viewShardDetail,
+                    labLib, labSub, labOverview, labIssues, labLoading,
+                    initLab, loadLabData, renderProfileCharts, renderFlowCharts, loadIssues,
+                    labDeep, labSamples, sampleZone,
+                    loadDeepAnalysis, loadSamples, jumpToExplorer,
+                    wdBins, wdLoading, wdResult, runWdWhatIf, resetWdBins,
+                    eThresholds, eLoading, eResult, runEWhatIf,
+                    eSuspicious, fOpportunities,
+                    selectedIssueIdx,
+                    rulePacks, showCreateRulePack, rulePacksLoading, rulePackSaving, rulePackError, newRulePack,
+                    loadRulePacks, saveRulePack, deleteRulePack
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>
