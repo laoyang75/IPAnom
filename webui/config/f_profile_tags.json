@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "description": "F库 单IP分散IP画像标签。标签按顺序执行，每个标签在前面标签的剩余池上工作。F库为不属于任何H块或E段的散点IP。",
+  "tags": [
+    {
+      "id": "cloud_service",
+      "name": "☁️ 云服务商",
+      "emoji": "☁️",
+      "color": "#ff6a00",
+      "logic": "AND",
+      "description": "云服务商 IP。运营商为主流云厂商。",
+      "conditions": [
+        {"field": "top_operator", "op": "IN", "value": ["阿里云","腾讯云","华为云","百度云","亚马逊","微软","京东云","天翼云","UCloud","金山云"], "label": "运营商=云服务商"}
+      ],
+      "notes": "优先排除云 IP。"
+    },
+    {
+      "id": "root_anomaly",
+      "name": "🚨 Root异常",
+      "emoji": "🚨",
+      "color": "#ef4444",
+      "logic": "AND",
+      "description": "Root上报比例≥20%的异常 IP。典型的设备篡改/群控特征。",
+      "conditions": [
+        {"field": "root_report_ratio", "op": ">=", "value": 0.20, "label": "Root占比 ≥ 20%"}
+      ],
+      "notes": "排在前面确保后续标签不会命中这些段。"
+    },
+    {
+      "id": "mobile_exit",
+      "name": "📶 移动出口",
+      "emoji": "📶",
+      "color": "#58a6ff",
+      "logic": "AND",
+      "description": "移动NAT出口IP。移动设备占比≥85%，高设备密度。",
+      "conditions": [
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 3, "label": "DAA/DNA ≥ 3"}
+      ],
+      "notes": "F库中的移动出口IP——虽然不成段，但单IP可能携带大量移动设备。"
+    },
+    {
+      "id": "enterprise_line",
+      "name": "🏢 企业专线",
+      "emoji": "🏢",
+      "color": "#0ea5e9",
+      "logic": "AND",
+      "description": "企业专线/办公网络IP。工作日活跃极高(≥85%)、深夜活跃极低(<3%)、WiFi主导。典型9-to-5模式。",
+      "conditions": [
+        {"field": "workday_report_ratio", "op": ">=", "value": 0.85, "label": "工作日占比 ≥ 85%"},
+        {"field": "late_night_report_ratio", "op": "<", "value": 0.03, "label": "深夜活跃 < 3%"},
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.80, "label": "WiFi比例 ≥ 80%"}
+      ],
+      "notes": "企业专线特征：工作日集中、深夜无活动、WiFi主导。"
+    },
+    {
+      "id": "scattered_mobile",
+      "name": "📱 零散移动",
+      "emoji": "📱",
+      "color": "#f97316",
+      "logic": "AND",
+      "description": "移动设备占比≥30%的零散IP。有一定移动设备接入但不构成出口。",
+      "conditions": [
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.30, "label": "移动占比 ≥ 30%"}
+      ],
+      "notes": "排在移动出口和Root异常之后。"
+    },
+    {
+      "id": "residential_broadband",
+      "name": "🏠 家庭宽带",
+      "emoji": "🏠",
+      "color": "#6366f1",
+      "logic": "AND",
+      "description": "家庭住宅宽带IP。WiFi极高(>90%)、有深夜活跃。散点家宽特征。",
+      "conditions": [
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi比例 > 90%"},
+        {"field": "late_night_report_ratio", "op": ">=", "value": 0.05, "label": "深夜活跃 > 5%"}
+      ],
+      "notes": "兜底家宽标签，覆盖所有WiFi高+深夜活跃的散点IP。"
+    }
+  ]
+}

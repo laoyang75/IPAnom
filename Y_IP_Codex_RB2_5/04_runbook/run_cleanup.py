@@ -2,6 +2,7 @@
 import os
 import psycopg2
 import sys
+from pathlib import Path
 
 # Configuration
 os.environ["PGHOST"] = "192.168.200.217"
@@ -17,15 +18,15 @@ DB_CONFIG = {
     "user": os.environ["PGUSER"],
     "password": os.environ["PGPASSWORD"]
 }
-RUN_ID = "rb20v2_20260202_191900_sg_001"
-SQL_FILE = "/Users/yangcongan/cursor/2/Y_IP_Codex_RB2_5/03_sql/00_cleanup_v2.sql"
+RUN_ID = os.getenv("RUN_ID", "rb20v2_20260202_191900_sg_001")
+SQL_FILE = str(Path(__file__).resolve().parent.parent / "03_sql" / "00_cleanup_v2.sql")
 
 def main():
     print(f"Executing Cleanup for {RUN_ID}...")
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     
-    with open(SQL_FILE, 'r') as f:
+    with open(SQL_FILE, 'r', encoding='utf-8') as f:
         sql_template = f.read()
     
     sql = sql_template.replace("{{run_id}}", RUN_ID)

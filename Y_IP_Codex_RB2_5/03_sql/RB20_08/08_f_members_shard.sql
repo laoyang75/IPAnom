@@ -11,22 +11,32 @@
 DELETE FROM rb20_v2_5.f_members
 WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint;
 
+SET enable_nestloop = off;
+SET work_mem = '256MB';
+SET statement_timeout = '15min';
+
 INSERT INTO rb20_v2_5.f_members(
   run_id, contract_version, shard_id,
   ip_long, atom27_id
+)
+WITH e_cov AS (
+  SELECT DISTINCT atom27_id
+  FROM rb20_v2_5.e_members
+  WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint
 )
 SELECT
   '{{run_id}}','{{contract_version}}', {{shard_id}}::smallint,
   r1.ip_long,
   r1.atom27_id
 FROM rb20_v2_5.r1_members r1
-LEFT JOIN rb20_v2_5.e_atoms ea
-  ON ea.run_id=r1.run_id
- AND ea.shard_id=r1.shard_id
- AND ea.atom27_id=r1.atom27_id
- AND ea.is_e_atom
+LEFT JOIN e_cov ec
+  ON ec.atom27_id=r1.atom27_id
 WHERE r1.run_id='{{run_id}}' AND r1.shard_id={{shard_id}}::smallint
-  AND ea.atom27_id IS NULL;
+  AND ec.atom27_id IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM rb20_v2_5.h_members hm
+    WHERE hm.run_id=r1.run_id AND hm.ip_long=r1.ip_long
+  );
 
 -- StepStats（per-shard）
 DELETE FROM rb20_v2_5.step_stats

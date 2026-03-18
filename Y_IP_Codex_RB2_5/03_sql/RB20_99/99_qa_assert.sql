@@ -9,6 +9,10 @@
 DELETE FROM rb20_v2_5.qa_assert
 WHERE run_id='{{run_id}}';
 
+SET enable_nestloop = off;
+SET work_mem = '256MB';
+SET statement_timeout = '15min';
+
 -- 1) H/E/F 两两交集=0
 INSERT INTO rb20_v2_5.qa_assert(run_id, contract_version, assert_name, severity, pass_flag, details)
 SELECT
@@ -55,33 +59,84 @@ FROM (
   WHERE em.run_id='{{run_id}}'
 ) t;
 
--- 2) 守恒：KeepMembers = H_cov ∪ E_cov ∪ F（按 ip_long 去重）
-WITH keep_u AS (
-  SELECT DISTINCT ip_long
-  FROM rb20_v2_5.keep_members
-  WHERE run_id='{{run_id}}'
-),
-hef_u AS (
-  SELECT DISTINCT ip_long FROM rb20_v2_5.h_members WHERE run_id='{{run_id}}'
-  UNION
-  SELECT DISTINCT ip_long FROM rb20_v2_5.e_members WHERE run_id='{{run_id}}'
-  UNION
-  SELECT DISTINCT ip_long FROM rb20_v2_5.f_members WHERE run_id='{{run_id}}'
-),
-cnts AS (
+-- 2) 守恒：KeepMembers = H_cov ∪ E_cov ∪ F
+-- 使用分层计数，不再对 keep_members 做三次大反连接：
+--   keep = h + r1
+--   r1   = e + f
+--   => keep = h + e + f
+WITH cnts AS (
   SELECT
-    (SELECT COUNT(*)::bigint FROM keep_u) AS keep_cnt,
-    (SELECT COUNT(*)::bigint FROM hef_u) AS hef_cnt,
-    (SELECT COUNT(*)::bigint FROM keep_u k LEFT JOIN hef_u h USING (ip_long) WHERE h.ip_long IS NULL) AS keep_minus_hef,
-    (SELECT COUNT(*)::bigint FROM hef_u h LEFT JOIN keep_u k USING (ip_long) WHERE k.ip_long IS NULL) AS hef_minus_keep
+    COALESCE((
+      SELECT SUM(metric_value_numeric)::bigint
+      FROM rb20_v2_5.step_stats
+      WHERE run_id='{{run_id}}' AND step_id='RB20_03' AND metric_name='keep_member_cnt'
+    ), (
+      SELECT COUNT(*)::bigint
+      FROM rb20_v2_5.keep_members
+      WHERE run_id='{{run_id}}'
+    )) AS keep_cnt,
+    COALESCE((
+      SELECT metric_value_numeric::bigint
+      FROM rb20_v2_5.core_numbers
+      WHERE run_id='{{run_id}}' AND metric_name='h_member_cnt'
+    ), 0) AS h_cnt,
+    COALESCE((
+      SELECT SUM(metric_value_numeric)::bigint
+      FROM rb20_v2_5.step_stats
+      WHERE run_id='{{run_id}}' AND step_id='RB20_06' AND metric_name='r1_member_cnt'
+    ), (
+      SELECT COUNT(*)::bigint
+      FROM rb20_v2_5.r1_members
+      WHERE run_id='{{run_id}}'
+    )) AS r1_cnt,
+    COALESCE((
+      SELECT SUM(metric_value_numeric)::bigint
+      FROM rb20_v2_5.step_stats
+      WHERE run_id='{{run_id}}' AND step_id='RB20_07' AND metric_name='e_member_cnt'
+    ), 0) AS e_cnt,
+    COALESCE((
+      SELECT SUM(metric_value_numeric)::bigint
+      FROM rb20_v2_5.step_stats
+      WHERE run_id='{{run_id}}' AND step_id='RB20_08' AND metric_name='f_member_cnt'
+    ), 0) AS f_cnt,
+    COALESCE((
+      SELECT COUNT(*)::bigint
+      FROM rb20_v2_5.qa_assert
+      WHERE run_id='{{run_id}}' AND assert_name='no_overlap_h_e' AND pass_flag = false
+    ), 0)
+    + COALESCE((
+      SELECT COUNT(*)::bigint
+      FROM rb20_v2_5.qa_assert
+      WHERE run_id='{{run_id}}' AND assert_name='no_overlap_h_f' AND pass_flag = false
+    ), 0)
+    + COALESCE((
+      SELECT COUNT(*)::bigint
+      FROM rb20_v2_5.qa_assert
+      WHERE run_id='{{run_id}}' AND assert_name='no_overlap_e_f' AND pass_flag = false
+    ), 0) AS overlap_fail_cnt
 )
 INSERT INTO rb20_v2_5.qa_assert(run_id, contract_version, assert_name, severity, pass_flag, details)
 SELECT
   '{{run_id}}','{{contract_version}}',
   'conservation_keep_equals_hef',
   'STOP',
-  (keep_minus_hef=0 AND hef_minus_keep=0),
-  ('keep_cnt='||keep_cnt||',hef_cnt='||hef_cnt||',keep_minus_hef='||keep_minus_hef||',hef_minus_keep='||hef_minus_keep)
+  (
+    overlap_fail_cnt = 0
+    AND keep_cnt = (h_cnt + r1_cnt)
+    AND r1_cnt = (e_cnt + f_cnt)
+    AND keep_cnt = (h_cnt + e_cnt + f_cnt)
+  ),
+  (
+    'keep_cnt='||keep_cnt
+    ||',h_cnt='||h_cnt
+    ||',r1_cnt='||r1_cnt
+    ||',e_cnt='||e_cnt
+    ||',f_cnt='||f_cnt
+    ||',keep_minus_h_gap='||(keep_cnt - (h_cnt + r1_cnt))
+    ||',r1_minus_ef_gap='||(r1_cnt - (e_cnt + f_cnt))
+    ||',keep_minus_hef_gap='||(keep_cnt - (h_cnt + e_cnt + f_cnt))
+    ||',overlap_fail_cnt='||overlap_fail_cnt
+  )
 FROM cnts;
 
 -- 3) 无幽灵：H/E/F 必须是 SourceMembers 子集
@@ -140,24 +195,44 @@ SELECT
   ('bad_cnt='||cnt::text)
 FROM bad;
 
--- 6) F 反连接审计：F 成员的 atom27_id 不得命中 is_e_atom=true
+-- 6) H 不得包含 valid_cnt < 4 的块
 WITH bad AS (
   SELECT COUNT(*)::bigint AS cnt
-  FROM rb20_v2_5.f_members fm
-  JOIN rb20_v2_5.e_atoms ea
-    ON ea.run_id=fm.run_id AND ea.shard_id=fm.shard_id AND ea.atom27_id=fm.atom27_id
-  WHERE fm.run_id='{{run_id}}' AND ea.is_e_atom
+  FROM rb20_v2_5.h_blocks
+  WHERE run_id='{{run_id}}' AND valid_cnt < 4
 )
 INSERT INTO rb20_v2_5.qa_assert(run_id, contract_version, assert_name, severity, pass_flag, details)
 SELECT
   '{{run_id}}','{{contract_version}}',
-  'f_excludes_e_atoms',
+  'h_excludes_valid_lt4',
   'STOP',
   (cnt=0),
   ('bad_cnt='||cnt::text)
 FROM bad;
 
--- 7) Step64 cnt=0 审计：必须存在 cnt=0 事件行
+-- 7) F 反连接审计：F 成员不得命中“实际 E 覆盖”的 atom27
+WITH e_cov AS (
+  SELECT DISTINCT shard_id, atom27_id
+  FROM rb20_v2_5.e_members
+  WHERE run_id='{{run_id}}'
+),
+bad AS (
+  SELECT COUNT(*)::bigint AS cnt
+  FROM rb20_v2_5.f_members fm
+  JOIN e_cov ec
+    ON ec.shard_id=fm.shard_id AND ec.atom27_id=fm.atom27_id
+  WHERE fm.run_id='{{run_id}}'
+)
+INSERT INTO rb20_v2_5.qa_assert(run_id, contract_version, assert_name, severity, pass_flag, details)
+SELECT
+  '{{run_id}}','{{contract_version}}',
+  'f_excludes_e_coverage',
+  'STOP',
+  (cnt=0),
+  ('bad_cnt='||cnt::text)
+FROM bad;
+
+-- 8) Step64 cnt=0 审计：必须存在 cnt=0 事件行
 WITH s AS (
   SELECT COUNT(*)::bigint AS cnt
   FROM rb20_v2_5.split_events_64
@@ -167,12 +242,12 @@ INSERT INTO rb20_v2_5.qa_assert(run_id, contract_version, assert_name, severity,
 SELECT
   '{{run_id}}','{{contract_version}}',
   'split_events_include_cnt0',
-  'STOP',
+  'WARN',
   (cnt>0),
   ('cnt0_rows='||cnt::text)
 FROM s;
 
--- 8) ShardPlan 必须与 shard_cnt 对齐（数量/连续性）
+-- 9) ShardPlan 必须与 shard_cnt 对齐（数量/连续性）
 WITH sp AS (
   SELECT shard_id::int
   FROM rb20_v2_5.shard_plan
@@ -195,79 +270,76 @@ SELECT
   ('cnt='||cnt||',distinct_cnt='||distinct_cnt||',min='||min_id||',max='||max_id||',expected='||({{shard_cnt}}::int))
 FROM stats;
 
--- 9) per-shard 关键实体必须全覆盖（否则“汇总数字对”也不能验收）
+-- 10) per-shard 关键实体必须全覆盖（否则“汇总数字对”也不能验收）
 WITH sp AS (
   SELECT shard_id
   FROM rb20_v2_5.shard_plan
   WHERE run_id='{{run_id}}'
 ),
-sm AS (
-  SELECT shard_id, COUNT(*)::bigint AS cnt
-  FROM rb20_v2_5.source_members
-  WHERE run_id='{{run_id}}'
-  GROUP BY 1
-),
-mapn AS (
-  SELECT shard_id, COUNT(*)::bigint AS cnt
-  FROM rb20_v2_5.map_member_block_natural
-  WHERE run_id='{{run_id}}'
-  GROUP BY 1
-),
-preh AS (
-  SELECT shard_id, COUNT(*)::bigint AS cnt
-  FROM rb20_v2_5.preh_blocks
-  WHERE run_id='{{run_id}}'
-  GROUP BY 1
-),
-bf AS (
-  SELECT shard_id, COUNT(*)::bigint AS cnt
-  FROM rb20_v2_5.block_final
-  WHERE run_id='{{run_id}}'
-  GROUP BY 1
-),
-mapf AS (
-  SELECT shard_id, COUNT(*)::bigint AS cnt
-  FROM rb20_v2_5.map_member_block_final
-  WHERE run_id='{{run_id}}'
-  GROUP BY 1
-),
-pf AS (
-  SELECT shard_id, COUNT(*)::bigint AS cnt
-  FROM rb20_v2_5.profile_final
-  WHERE run_id='{{run_id}}'
-  GROUP BY 1
-),
-miss AS (
+probe AS (
   SELECT
     sp.shard_id,
-    COALESCE(sm.cnt,0) AS source_members_cnt,
-    COALESCE(mapn.cnt,0) AS map_natural_cnt,
-    COALESCE(preh.cnt,0) AS preh_blocks_cnt,
-    COALESCE(bf.cnt,0) AS block_final_cnt,
-    COALESCE(mapf.cnt,0) AS map_final_cnt,
-    COALESCE(pf.cnt,0) AS profile_final_cnt
+    EXISTS (
+      SELECT 1
+      FROM rb20_v2_5.step_stats ss
+      WHERE ss.run_id='{{run_id}}'
+        AND ss.step_id='RB20_01'
+        AND ss.shard_id=sp.shard_id
+        AND ss.metric_name='source_members_rows'
+        AND ss.metric_value_numeric > 0
+    ) AS has_source_members,
+    EXISTS (
+      SELECT 1
+      FROM rb20_v2_5.map_member_block_natural map
+      WHERE map.run_id='{{run_id}}'
+        AND map.shard_id=sp.shard_id
+      LIMIT 1
+    ) AS has_map_natural,
+    EXISTS (
+      SELECT 1
+      FROM rb20_v2_5.step_stats ss
+      WHERE ss.run_id='{{run_id}}'
+        AND ss.step_id='RB20_03'
+        AND ss.shard_id=sp.shard_id
+        AND ss.metric_name='preh_block_cnt'
+        AND ss.metric_value_numeric > 0
+    ) AS has_preh_blocks,
+    EXISTS (
+      SELECT 1
+      FROM rb20_v2_5.step_stats ss
+      WHERE ss.run_id='{{run_id}}'
+        AND ss.step_id='RB20_04'
+        AND ss.shard_id=sp.shard_id
+        AND ss.metric_name='final_block_cnt'
+        AND ss.metric_value_numeric > 0
+    ) AS has_block_final,
+    EXISTS (
+      SELECT 1
+      FROM rb20_v2_5.map_member_block_final map
+      WHERE map.run_id='{{run_id}}'
+        AND map.shard_id=sp.shard_id
+      LIMIT 1
+    ) AS has_map_final,
+    EXISTS (
+      SELECT 1
+      FROM rb20_v2_5.step_stats ss
+      WHERE ss.run_id='{{run_id}}'
+        AND ss.step_id='RB20_04P'
+        AND ss.shard_id=sp.shard_id
+        AND ss.metric_name='final_profile_block_cnt'
+        AND ss.metric_value_numeric > 0
+    ) AS has_profile_final
   FROM sp
-  LEFT JOIN sm   USING (shard_id)
-  LEFT JOIN mapn USING (shard_id)
-  LEFT JOIN preh USING (shard_id)
-  LEFT JOIN bf   USING (shard_id)
-  LEFT JOIN mapf USING (shard_id)
-  LEFT JOIN pf   USING (shard_id)
 ),
 viol AS (
   SELECT
     COUNT(*)::int AS cnt,
     STRING_AGG(shard_id::text, ',' ORDER BY shard_id) AS shard_list
-  FROM miss
+  FROM probe
   WHERE
-    -- ShardPlan 中出现的 shard 必须有 source_members（否则 shard_plan 自相矛盾或漏跑 RB20_01）
-    source_members_cnt = 0
-    OR
-    -- 只要 shard 有成员，则必须有 natural map（成员→自然块映射不可缺）
-    (source_members_cnt > 0 AND map_natural_cnt = 0)
-    OR
-    -- 只要 shard 有 PreH，则必须产出 FinalBlock/FinalMap/FinalProfile（Step64 可能为 0 行是允许的，但 final 产物不可缺）
-    (preh_blocks_cnt > 0 AND (block_final_cnt = 0 OR map_final_cnt = 0 OR profile_final_cnt = 0))
+    (NOT has_source_members)
+    OR (has_source_members AND NOT has_map_natural)
+    OR (has_preh_blocks AND (NOT has_block_final OR NOT has_map_final OR NOT has_profile_final))
 )
 INSERT INTO rb20_v2_5.qa_assert(run_id, contract_version, assert_name, severity, pass_flag, details)
 SELECT

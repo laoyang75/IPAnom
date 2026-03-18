@@ -3,8 +3,13 @@ Library Lab Research API — IP 库画像研究端点
 
 Phase 1: 库总览/对比、分布查询、流转漏斗、边界检测
 """
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Body
+from fastapi.responses import JSONResponse
 from models.database import fetch_all, fetch_one
+import json, os
+from datetime import datetime
+from pathlib import Path
+from services.summary_state import get_summary_status, resolve_run_id
 
 router = APIRouter(prefix="/api/research", tags=["Research"])
 
@@ -12,12 +17,7 @@ SCHEMA = "rb20_v2_5"
 
 # ── Helper: resolve latest run_id ──
 async def _resolve_run(run_id: str = None) -> str:
-    if run_id:
-        return run_id
-    row = await fetch_one(
-        f"SELECT run_id FROM {SCHEMA}.shard_plan ORDER BY created_at DESC LIMIT 1"
-    )
-    return row["run_id"] if row else None
+    return await resolve_run_id(run_id)
 
 
 # ============================================================
@@ -1156,4 +1156,614 @@ async def whatif_e(run_id: str, body: dict):
             "old_pass_run_atoms": old_pass_run_atoms,
             "new_pass_run_atoms": new_pass_run_atoms,
         },
+    }
+
+# ============================================================
+# 7.5) H 库 Block 摘要看板 (h_block_summary)
+# ============================================================
+@router.get("/runs/{run_id}/h/kpi")
+async def h_library_kpi(run_id: str):
+    """H库宏观 KPI：总 block 数、总 IP、总上报、平均 score 等"""
+    run_id = await _resolve_run(run_id)
+    summary_status = await get_summary_status(run_id, "h")
+    row = await fetch_one(f"""
+        SELECT
+            COUNT(*)::bigint               AS total_blocks,
+            SUM(ip_count)::bigint          AS total_ips,
+            ROUND(AVG(ip_count), 1)        AS avg_ip_per_block,
+            ROUND(AVG(simple_score), 1)    AS avg_score,
+            ROUND(AVG(density::numeric), 1) AS avg_density,
+            SUM(total_reports)::bigint     AS total_reports,
+            SUM(total_devices)::bigint     AS total_devices,
+            SUM(daa_reports)::bigint       AS total_daa,
+            SUM(dna_reports)::bigint       AS total_dna,
+            SUM(wifi_devices)::bigint      AS total_wifi_devices,
+            SUM(mobile_devices)::bigint    AS total_mobile_devices,
+            ROUND(AVG(avg_active_days::numeric), 1) AS avg_active_days,
+            SUM(unstable_ip_count)::bigint AS total_unstable_ips,
+            COUNT(DISTINCT top_operator)   AS distinct_operators
+        FROM {SCHEMA}.h_block_summary
+        WHERE run_id = :run_id
+    """, {"run_id": run_id})
+    return {
+        **(dict(row) if row else {}),
+        "run_id": run_id,
+        "summary_status": summary_status,
+    }
+
+
+@router.get("/runs/{run_id}/h/summary-blocks")
+async def get_h_summary_blocks(
+    run_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    sort_by: str = Query("ip_count", description="Sort field"),
+    desc: bool = Query(True, description="Descending order"),
+    filter_col: str = Query("", description="Column to filter on"),
+    filter_min: str = Query("", description="Min value for filter"),
+    filter_max: str = Query("", description="Max value for filter"),
+    exclude_tagged: bool = Query(False, description="Exclude blocks matched by known profiling tags"),
+):
+    """H库 Block 级摘要（分页 + 排序 + 筛选），基于 h_block_summary 表。"""
+    run_id = await _resolve_run(run_id)
+    summary_status = await get_summary_status(run_id, "h")
+
+    valid_sorts = {
+        "ip_count", "total_reports", "total_reports_pre_filter",
+        "total_devices", "total_devices_pre_filter", "density",
+        "daa_reports", "dna_reports", "worktime_reports",
+        "workday_reports", "weekend_reports", "late_night_reports",
+        "wifi_devices", "mobile_devices", "vpn_devices", "wired_devices",
+        "abnormal_net_devices", "total_apps",
+        "android_id_count", "oaid_count", "google_id_count",
+        "model_count", "manufacturer_count",
+        "proxy_reports", "root_reports", "adb_reports",
+        "charging_reports", "max_single_device_reports",
+        "avg_reports_per_ip", "avg_devices_per_ip", "avg_active_days",
+        "wifi_device_ratio", "mobile_device_ratio", "vpn_device_ratio",
+        "workday_report_ratio", "late_night_report_ratio", "daa_dna_ratio",
+        "abnormal_ip_count", "abnormal_ip_ratio", "abnormal_rule_hits_total",
+        "abnormal_r1", "abnormal_r2", "abnormal_r3", "abnormal_r5",
+        "abnormal_r7", "abnormal_r18", "abnormal_r19", "abnormal_r24", "abnormal_r26",
+        "start_ip_text", "avg_apps_per_ip",
+        "avg_model_per_ip", "avg_manufacturer_per_ip",
+        "android_device_ratio", "oaid_device_ratio",
+        "android_oaid_ratio",
+        "report_oaid_ratio",
+    }
+    order_col = sort_by if sort_by in valid_sorts else "ip_count"
+    order_dir = "DESC" if desc else "ASC"
+
+    # Build filter clause
+    filter_clause = ""
+    params = {"run_id": run_id}
+    if filter_col and filter_col in valid_sorts and filter_col != "start_ip_text":
+        if filter_min:
+            filter_clause += f" AND {filter_col} >= :fmin"
+            params["fmin"] = float(filter_min)
+        if filter_max:
+            filter_clause += f" AND {filter_col} <= :fmax"
+            params["fmax"] = float(filter_max)
+
+    # Exclude tagged blocks
+    if exclude_tagged:
+        try:
+            import json
+            from pathlib import Path
+            cfg_path = Path(__file__).parent.parent / "config" / "profile_tags.json"
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            for tag in cfg.get("tags", []):
+                tag_logic = tag.get("logic", "AND")
+                if tag_logic.upper() == "CUSTOM":
+                    continue  # Skip CUSTOM tags in simple exclude
+                parts = []
+                for c in tag.get("conditions", []):
+                    field = c["field"]
+                    op = c["op"]
+                    val = c["value"]
+                    if not field.replace("_", "").isalnum():
+                        continue
+                    if op == "IN" and isinstance(val, list):
+                        quoted = ", ".join(f"'{v}'" for v in val)
+                        parts.append(f"COALESCE({field},'') IN ({quoted})")
+                    elif op == "TIERED" and isinstance(val, dict):
+                        tier_field = val.get("tier_field", "total_devices")
+                        tiers = val.get("tiers", [])
+                        if tiers and tier_field.replace("_", "").isalnum():
+                            case_parts = []
+                            for t in tiers:
+                                th = t['threshold']
+                                val_expr = "TRUE" if th == 0 else f"{field} >= {th}"
+                                if "max" in t:
+                                    case_parts.append(f"WHEN {tier_field} < {t['max']} THEN {val_expr}")
+                                else:
+                                    case_parts.append(f"ELSE {val_expr}")
+                            parts.append(f"(CASE {' '.join(case_parts)} END)")
+                    elif op in (">=", "<=", ">", "<", "=", "!="):
+                        if isinstance(val, str):
+                            safe_val = val.replace("'", "''")
+                            parts.append(f"{field} {op} '{safe_val}'")
+                        else:
+                            parts.append(f"{field} {op} {val}")
+                if parts:
+                    joiner = " OR " if tag_logic.upper() == "OR" else " AND "
+                    filter_clause += f" AND NOT ({joiner.join(parts)})"
+        except Exception:
+            pass  # Silently ignore config errors
+
+    offset = (page - 1) * page_size
+
+    count_row = await fetch_one(
+        f"SELECT COUNT(*) as total FROM {SCHEMA}.h_block_summary WHERE run_id = :run_id{filter_clause}",
+        params
+    )
+    total = count_row["total"] if count_row else 0
+
+    sql = f"""
+        SELECT *
+        FROM {SCHEMA}.h_block_summary
+        WHERE run_id = :run_id{filter_clause}
+        ORDER BY {order_col} {order_dir} NULLS LAST
+        LIMIT :limit OFFSET :offset
+    """
+    params["limit"] = page_size
+    params["offset"] = offset
+    rows = await fetch_all(sql, params)
+
+    return {
+        "run_id": run_id,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "blocks": [dict(r) for r in rows],
+        "summary_status": summary_status,
+    }
+
+
+# ============================================================
+# 8) E 库 CIDR 摘要看板 (e_cidr_summary)
+# ============================================================
+@router.get("/runs/{run_id}/e/kpi")
+async def e_library_kpi(run_id: str):
+    """E库宏观 KPI：总 CIDR 块数、总 IP、总上报、总设备等"""
+    run_id = await _resolve_run(run_id)
+    summary_status = await get_summary_status(run_id, "e")
+    row = await fetch_one(f"""
+        SELECT
+            COUNT(*)::bigint               AS total_runs,
+            SUM(ip_count)::bigint          AS total_ips,
+            ROUND(AVG(ip_count), 1)        AS avg_ip_per_run,
+            ROUND(AVG(run_len), 1)         AS avg_run_len,
+            SUM(total_reports)::bigint     AS total_reports,
+            SUM(total_devices)::bigint     AS total_devices,
+            SUM(daa_reports)::bigint       AS total_daa,
+            SUM(dna_reports)::bigint       AS total_dna,
+            SUM(wifi_devices)::bigint      AS total_wifi_devices,
+            SUM(mobile_devices)::bigint    AS total_mobile_devices,
+            SUM(vpn_devices)::bigint       AS total_vpn_devices,
+            ROUND(AVG(avg_active_days), 1) AS avg_active_days,
+            SUM(unstable_ip_count)::bigint AS total_unstable_ips,
+            COUNT(DISTINCT top_operator)   AS distinct_operators
+        FROM {SCHEMA}.e_cidr_summary
+        WHERE run_id = :run_id
+    """, {"run_id": run_id})
+    return {
+        **(dict(row) if row else {}),
+        "run_id": run_id,
+        "summary_status": summary_status,
+    }
+
+
+@router.get("/runs/{run_id}/e/summary-blocks")
+async def get_e_summary_blocks(
+    run_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    sort_by: str = Query("ip_count", description="Sort field"),
+    desc: bool = Query(True, description="Descending order"),
+    filter_col: str = Query("", description="Column to filter on"),
+    filter_min: str = Query("", description="Min value for filter"),
+    filter_max: str = Query("", description="Max value for filter"),
+    exclude_tagged: bool = Query(False, description="Exclude blocks matched by known profiling tags"),
+):
+    """
+    E库 CIDR 块级摘要（分页 + 排序 + 筛选），基于 e_cidr_summary 表。
+    """
+    run_id = await _resolve_run(run_id)
+    summary_status = await get_summary_status(run_id, "e")
+
+    valid_sorts = {
+        "ip_count", "total_reports", "total_devices", "run_len",
+        "daa_reports", "dna_reports", "wifi_devices", "mobile_devices",
+        "avg_reports_per_ip", "avg_devices_per_ip", "avg_active_days",
+        "wifi_device_ratio", "mobile_device_ratio", "vpn_device_ratio",
+        "workday_report_ratio", "late_night_report_ratio",
+        "unstable_ip_count", "manufacturer_count", "ssid_count",
+        "proxy_reports", "root_reports", "adb_reports",
+        "ip_density", "daa_dna_ratio", "total_apps",
+        "abnormal_ip_count", "abnormal_ip_ratio",
+        "avg_apps_per_device", "avg_apps_per_ip",
+        "start_ip_text", "network_tier_final", "simple_score",
+        "android_id_count", "oaid_count",
+        "charging_reports", "max_single_device_reports",
+    }
+    order_col = sort_by if sort_by in valid_sorts else "ip_count"
+    order_dir = "DESC" if desc else "ASC"
+
+    # Build filter clause
+    filter_clause = ""
+    params = {"run_id": run_id}
+    if filter_col and filter_col in valid_sorts and filter_col != "start_ip_text":
+        if filter_min:
+            filter_clause += f" AND {filter_col} >= :fmin"
+            params["fmin"] = float(filter_min)
+        if filter_max:
+            filter_clause += f" AND {filter_col} <= :fmax"
+            params["fmax"] = float(filter_max)
+
+    # Exclude tagged blocks
+    if exclude_tagged:
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            cfg_path = _Path(__file__).parent.parent / "config" / "e_profile_tags.json"
+            if cfg_path.exists():
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = _json.load(f)
+                for tag in cfg.get("tags", []):
+                    tag_logic = tag.get("logic", "AND")
+                    if tag_logic.upper() == "CUSTOM":
+                        continue
+                    parts = []
+                    for c in tag.get("conditions", []):
+                        field = c["field"]
+                        op = c["op"]
+                        val = c["value"]
+                        if not field.replace("_", "").isalnum():
+                            continue
+                        if op == "IN" and isinstance(val, list):
+                            quoted = ", ".join(f"'{v}'" for v in val)
+                            parts.append(f"COALESCE({field},'') IN ({quoted})")
+                        elif op in (">=", "<=", ">", "<", "=", "!="):
+                            if isinstance(val, str):
+                                safe_val = val.replace("'", "''")
+                                parts.append(f"{field} {op} '{safe_val}'")
+                            else:
+                                parts.append(f"{field} {op} {val}")
+                    if parts:
+                        joiner = " OR " if tag_logic.upper() == "OR" else " AND "
+                        filter_clause += f" AND NOT ({joiner.join(parts)})"
+        except Exception:
+            pass
+
+    offset = (page - 1) * page_size
+
+    count_row = await fetch_one(
+        f"SELECT COUNT(*) as total FROM {SCHEMA}.e_cidr_summary WHERE run_id = :run_id{filter_clause}",
+        params
+    )
+    total = count_row["total"] if count_row else 0
+
+    sql = f"""
+        SELECT *
+        FROM {SCHEMA}.e_cidr_summary
+        WHERE run_id = :run_id{filter_clause}
+        ORDER BY {order_col} {order_dir} NULLS LAST
+        LIMIT :limit OFFSET :offset
+    """
+    params["limit"] = page_size
+    params["offset"] = offset
+    rows = await fetch_all(sql, params)
+
+    return {
+        "run_id": run_id,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "blocks": [dict(r) for r in rows],
+        "summary_status": summary_status,
+    }
+
+
+# ============================================================
+# 8.5) F 库 IP 摘要看板 (f_ip_summary)
+# ============================================================
+@router.get("/runs/{run_id}/f/kpi")
+async def f_library_kpi(run_id: str):
+    """F库宏观 KPI：总 IP、总上报、总设备、稳定性分布等"""
+    run_id = await _resolve_run(run_id)
+    summary_status = await get_summary_status(run_id, "f")
+    row = await fetch_one(f"""
+        SELECT
+            COUNT(*)::bigint AS total_ips,
+            SUM(total_reports)::bigint AS total_reports,
+            SUM(total_devices)::bigint AS total_devices,
+            ROUND(AVG(total_reports)::numeric, 1) AS avg_reports_per_ip,
+            ROUND(AVG(total_devices)::numeric, 1) AS avg_devices_per_ip,
+            ROUND(AVG(active_days)::numeric, 1) AS avg_active_days,
+            COUNT(*) FILTER (WHERE ip_stability = '稳定网络')::bigint AS stable_ips,
+            COUNT(*) FILTER (WHERE ip_stability = '不稳定网络')::bigint AS unstable_ips,
+            COUNT(*) FILTER (WHERE ip_stability = '消失网络')::bigint AS vanished_ips,
+            COUNT(DISTINCT top_operator) AS distinct_operators,
+            SUM(proxy_reports)::bigint AS proxy_reports,
+            SUM(root_reports)::bigint AS root_reports,
+            SUM(adb_reports)::bigint AS adb_reports
+        FROM {SCHEMA}.f_ip_summary
+        WHERE run_id = :run_id
+    """, {"run_id": run_id})
+    return {
+        **(dict(row) if row else {}),
+        "run_id": run_id,
+        "summary_status": summary_status,
+    }
+
+
+@router.get("/runs/{run_id}/f/summary-ips")
+async def get_f_summary_ips(
+    run_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    sort_by: str = Query("total_reports", description="Sort field"),
+    desc: bool = Query(True, description="Descending order"),
+    filter_col: str = Query("", description="Column to filter on"),
+    filter_min: str = Query("", description="Min value for filter"),
+    filter_max: str = Query("", description="Max value for filter"),
+):
+    """F库单 IP 摘要（分页 + 排序 + 筛选），基于 f_ip_summary 表。"""
+    run_id = await _resolve_run(run_id)
+    summary_status = await get_summary_status(run_id, "f")
+
+    valid_sorts = {
+        "ip_address", "ip_stability", "top_operator",
+        "total_reports", "total_reports_pre_filter", "total_devices",
+        "total_devices_pre_filter", "daa_reports", "dna_reports",
+        "worktime_reports", "workday_reports", "weekend_reports", "late_night_reports",
+        "wifi_devices", "mobile_devices", "vpn_devices", "wired_devices",
+        "abnormal_net_devices", "total_apps", "active_days",
+        "android_id_count", "oaid_count", "google_id_count", "boot_id_count",
+        "model_count", "manufacturer_count", "ssid_count", "bssid_count",
+        "proxy_reports", "root_reports", "adb_reports", "charging_reports",
+        "max_single_device_reports", "gateway_reports", "ethernet_reports",
+        "wifi_device_ratio", "mobile_device_ratio", "vpn_device_ratio",
+        "workday_report_ratio", "weekend_report_ratio", "late_night_report_ratio",
+        "root_report_ratio", "daa_dna_ratio",
+    }
+    order_col = sort_by if sort_by in valid_sorts else "total_reports"
+    order_dir = "DESC" if desc else "ASC"
+
+    filter_clause = ""
+    params = {"run_id": run_id}
+    text_filters = {"ip_address", "ip_stability", "top_operator"}
+    if filter_col and filter_col in valid_sorts:
+        if filter_col in text_filters:
+            if filter_min:
+                filter_clause += f" AND {filter_col} ILIKE :ftext"
+                params["ftext"] = f"%{filter_min.strip()}%"
+        else:
+            if filter_min:
+                filter_clause += f" AND {filter_col} >= :fmin"
+                params["fmin"] = float(filter_min)
+            if filter_max:
+                filter_clause += f" AND {filter_col} <= :fmax"
+                params["fmax"] = float(filter_max)
+
+    offset = (page - 1) * page_size
+    count_row = await fetch_one(
+        f"SELECT COUNT(*) AS total FROM {SCHEMA}.f_ip_summary WHERE run_id = :run_id{filter_clause}",
+        params,
+    )
+    total = count_row["total"] if count_row else 0
+
+    sql = f"""
+        SELECT *
+        FROM {SCHEMA}.f_ip_summary
+        WHERE run_id = :run_id{filter_clause}
+        ORDER BY {order_col} {order_dir} NULLS LAST
+        LIMIT :limit OFFSET :offset
+    """
+    params["limit"] = page_size
+    params["offset"] = offset
+    rows = await fetch_all(sql, params)
+
+    return {
+        "run_id": run_id,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "ips": [dict(r) for r in rows],
+        "summary_status": summary_status,
+    }
+
+
+# ============================================================
+# 13) 字段管理工作台 — 保存用户的字段审阅和自定义计算列
+# ============================================================
+FIELD_CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "docs" / "field_configs"
+
+@router.post("/field-config")
+async def save_field_config(body: dict = Body(...)):
+    """
+    保存字段审阅和自定义计算列配置为 JSON 文件。
+    body: {
+        "library": "h" | "e",
+        "fields": [{"name": "...", "keep": true/false, "comment": "..."}],
+        "computed_columns": [{"name": "...", "formula": "...", "fieldA": "...", "op": "+|-|*|/", "fieldB": "..."}]
+    }
+    """
+    FIELD_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    lib = body.get("library", "h")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{lib}_field_config_{ts}.json"
+    filepath = FIELD_CONFIG_DIR / filename
+
+    output = {
+        "library": lib,
+        "created_at": datetime.now().isoformat(),
+        "fields": body.get("fields", []),
+        "computed_columns": body.get("computed_columns", []),
+    }
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+    return JSONResponse(content={
+        "status": "ok",
+        "file": str(filepath),
+        "filename": filename,
+        "field_count": len(output["fields"]),
+        "computed_count": len(output["computed_columns"]),
+    })
+
+
+@router.get("/ip-neighborhood")
+async def ip_neighborhood(
+    ip: str = Query(..., description="IP address to search, e.g. 1.2.3.4"),
+    radius: int = Query(8, ge=1, le=100, description="Number of IPs before and after"),
+    run_id: str = Query("latest", description="Run ID")
+):
+    """IP 邻域查询 —— 在原始IP源表中查询目标IP前后N个IP的全部属性。"""
+    import ipaddress
+
+    run_id = await _resolve_run(run_id)
+
+    # 将 IP 转为 bigint
+    try:
+        ip_long = int(ipaddress.ip_address(ip))
+    except ValueError:
+        return {"error": f"Invalid IP address: {ip}"}
+
+    src_table = 'public."ip库构建项目_ip源表_20250811_20250824_v2_1"'
+
+    # 先检查目标 IP 是否在源表中
+    target_in_src = await fetch_one(f"""
+        SELECT ip_long FROM {src_table} WHERE ip_long = :ip_long LIMIT 1
+    """, {"ip_long": ip_long})
+
+    search_ip_long = ip_long  # 默认以用户输入 IP 为中心
+    cidr_redirect = None      # 如果重定向了，记下来
+
+    if not target_in_src:
+        # IP 不在源表中 —— 检查是否是 E 库 CIDR 段起始 IP
+        e_cidr = await fetch_one(f"""
+            SELECT e_run_id, start_ip_text, ip_count, run_len,
+                   total_reports, total_devices,
+                   wifi_device_ratio, mobile_device_ratio,
+                   NULL AS network_tier_final, NULL AS simple_score,
+                   top_operator, proxy_reports, root_reports
+            FROM {SCHEMA}.e_cidr_summary
+            WHERE run_id = :run_id AND start_ip_text = :ip
+        """, {"run_id": run_id, "ip": ip})
+        if e_cidr:
+            # 找到 E 库段，以段成员的最小 IP 为中心搜邻域
+            min_member = await fetch_one(f"""
+                SELECT MIN(ip_long) AS min_ip FROM {SCHEMA}.e_members
+                WHERE run_id = :run_id AND e_run_id = :e_run_id
+            """, {"run_id": run_id, "e_run_id": e_cidr["e_run_id"]})
+            if min_member and min_member["min_ip"]:
+                search_ip_long = int(min_member["min_ip"])
+                cidr_redirect = {
+                    "original_ip": ip,
+                    "original_ip_long": ip_long,
+                    "redirected_to": str(ipaddress.ip_address(search_ip_long)),
+                    "redirected_ip_long": search_ip_long,
+                    "reason": f"输入 IP 是 E 库 CIDR 段起始标记，实际成员从 {str(ipaddress.ip_address(search_ip_long))} 开始"
+                }
+
+    # 查前后 radius 个 IP (按 ip_long 排序)
+    sql = f"""
+        (SELECT * FROM {src_table} WHERE ip_long <= :ip_long ORDER BY ip_long DESC LIMIT :before)
+        UNION ALL
+        (SELECT * FROM {src_table} WHERE ip_long > :ip_long ORDER BY ip_long ASC LIMIT :after)
+        ORDER BY ip_long
+    """
+    rows = await fetch_all(sql, {
+        "ip_long": search_ip_long,
+        "before": radius + 1,
+        "after": radius
+    })
+
+    # 查该 IP 是否在 H库
+    h_block = None
+    h_row = await fetch_one(f"""
+        SELECT hm.block_id_final, bs.start_ip_text, bs.ip_count,
+               bs.unstable_ip_count, bs.network_tier_final
+        FROM {SCHEMA}.h_members hm
+        LEFT JOIN {SCHEMA}.h_block_summary bs
+            ON hm.block_id_final = bs.block_id_final AND bs.run_id = :run_id
+        WHERE hm.ip_long = :ip_long AND hm.run_id = :run_id
+    """, {"ip_long": search_ip_long, "run_id": run_id})
+    if h_row:
+        h_block = dict(h_row)
+
+    # 查该 IP 是否在 E库
+    e_block = None
+    e_row = await fetch_one(f"""
+        SELECT em.e_run_id, em.atom27_id,
+               es.start_ip_text, es.ip_count, es.run_len,
+               es.total_reports, es.total_devices,
+               es.wifi_device_ratio, es.mobile_device_ratio,
+               NULL AS network_tier_final, NULL AS simple_score,
+               es.top_operator, es.proxy_reports, es.root_reports
+        FROM {SCHEMA}.e_members em
+        LEFT JOIN {SCHEMA}.e_cidr_summary es
+            ON em.e_run_id = es.e_run_id AND es.run_id = :run_id
+        WHERE em.ip_long = :ip_long AND em.run_id = :run_id
+    """, {"ip_long": search_ip_long, "run_id": run_id})
+    if e_row:
+        e_block = dict(e_row)
+
+    # 如果都没找到，尝试按 start_ip_text 查 e_cidr_summary
+    if not h_block and not e_block:
+        e_cidr_fb = await fetch_one(f"""
+            SELECT e_run_id, start_ip_text, ip_count, run_len,
+                   total_reports, total_devices,
+                   wifi_device_ratio, mobile_device_ratio,
+                   NULL AS network_tier_final, NULL AS simple_score,
+                   top_operator, proxy_reports, root_reports
+            FROM {SCHEMA}.e_cidr_summary
+            WHERE run_id = :run_id AND start_ip_text = :ip
+        """, {"run_id": run_id, "ip": ip})
+        if e_cidr_fb:
+            e_block = dict(e_cidr_fb)
+
+    # 收集邻域内所有 IP 的 e_run_id，批量查询它们所属的 e_cidr
+    ip_longs = [int(dict(r).get("ip_long") or dict(r).get("ipv4_bigint") or 0) for r in rows]
+    e_member_map = {}
+    if ip_longs:
+        ip_list_str = ",".join(str(il) for il in ip_longs if il > 0)
+        if ip_list_str:
+            e_members_rows = await fetch_all(f"""
+                SELECT ip_long, e_run_id FROM {SCHEMA}.e_members
+                WHERE run_id = :run_id AND ip_long IN ({ip_list_str})
+            """, {"run_id": run_id})
+            for em in e_members_rows:
+                e_member_map[int(em["ip_long"])] = em["e_run_id"]
+
+    # 将 ip_long 转为点分格式
+    result_rows = []
+    for r in rows:
+        d = dict(r)
+        long_val = d.get("ip_long") or d.get("ipv4_bigint") or 0
+        if long_val:
+            long_val = int(long_val)
+            d["ip_text"] = str(ipaddress.ip_address(long_val))
+        d["is_target"] = (long_val == search_ip_long)
+        # 标注所属库
+        if long_val in e_member_map:
+            d["lib"] = "E"
+            d["e_run_id"] = e_member_map[long_val]
+        result_rows.append(d)
+
+    return {
+        "ip": ip,
+        "ip_long": ip_long,
+        "search_ip_long": search_ip_long,
+        "radius": radius,
+        "h_block": h_block,
+        "e_block": e_block,
+        "cidr_redirect": cidr_redirect,
+        "total": len(result_rows),
+        "rows": result_rows
     }

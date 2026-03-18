@@ -1,0 +1,167 @@
+{
+  "version": 9,
+  "description": "H库 Block 漏斗式画像标签 v9。顺序：移动3运营商 → 混合网络 → 云IDC → 轻度混合 → 异常检测 → 固定网络(拆运营商)。标签按顺序执行，每个标签在前面标签的剩余池上工作。",
+  "tags": [
+    {
+      "id": "mobile_cmcc",
+      "name": "正常移动出口·中国移动",
+      "emoji": "📱",
+      "color": "#3fb950",
+      "logic": "AND",
+      "description": "中国移动移动NAT出口。移动IP少(仅8块)但设备密度高(P50=40/IP)、应用多样性强(P50=19/IP)、DAA/DNA正常(P50=17.6)。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国移动", "label": "运营商=中国移动"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 8, "label": "DAA/DNA ≥ 8"},
+        {"field": "avg_apps_per_ip", "op": ">=", "value": 5, "label": "均应用/IP ≥ 5"},
+        {"field": "avg_devices_per_ip", "op": ">=", "value": 20, "label": "均设备/IP ≥ 20"}
+      ]
+    },
+    {
+      "id": "mobile_unicom",
+      "name": "正常移动出口·中国联通",
+      "emoji": "📡",
+      "color": "#79c0ff",
+      "logic": "AND",
+      "description": "中国联通移动NAT出口。密度中等(P50=76/IP)，DAA/DNA正常(P50=15.2)，应用丰富(P50=25.8)。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国联通", "label": "运营商=中国联通"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 8, "label": "DAA/DNA ≥ 8"},
+        {"field": "avg_apps_per_ip", "op": ">=", "value": 5, "label": "均应用/IP ≥ 5"},
+        {"field": "avg_devices_per_ip", "op": ">=", "value": 20, "label": "均设备/IP ≥ 20"}
+      ]
+    },
+    {
+      "id": "mobile_telecom",
+      "name": "正常移动出口·中国电信",
+      "emoji": "📶",
+      "color": "#58a6ff",
+      "logic": "AND",
+      "description": "中国电信移动NAT出口，数量最多(3,816块)。电信IP资源充裕，单IP设备密度可低至19(P05)。DAA/DNA偏低(P50=11.7)但仍正常。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国电信", "label": "运营商=中国电信"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 3, "label": "DAA/DNA ≥ 3"},
+        {"field": "avg_apps_per_ip", "op": ">=", "value": 5, "label": "均应用/IP ≥ 5"},
+        {"field": "avg_devices_per_ip", "op": ">=", "value": 5, "label": "均设备/IP ≥ 5"}
+      ]
+    },
+    {
+      "id": "network_mixed",
+      "name": "混合网络",
+      "emoji": "🔀",
+      "color": "#d2a8ff",
+      "logic": "AND",
+      "description": "移动占比10~80%的混合网络(WiFi+移动共存)。可能是固移融合出口或运营商NAT复用。10%为天然断点(5~10%段为0块)。",
+      "conditions": [
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.10, "label": "移动占比 ≥ 10%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 5, "label": "DAA/DNA ≥ 5"},
+        {"field": "avg_apps_per_ip", "op": ">=", "value": 5, "label": "均应用/IP ≥ 5"}
+      ]
+    },
+    {
+      "id": "cloud_proxy",
+      "name": "云服务/IDC出口",
+      "emoji": "☁️",
+      "color": "#6e7681",
+      "logic": "AND",
+      "description": "阿里云/腾讯云/华为云等云服务代理出口。单IP承载大量设备(avg=655/IP)但应用极少(avg=8.6/IP)，属于VPN/代理/SDK服务器场景，非造假。",
+      "conditions": [
+        {"field": "top_operator", "op": "IN", "value": ["阿里云","腾讯云","华为云","百度云","亚马逊","微软","京东云","天翼云","UCloud","金山云"], "label": "运营商=云服务商"}
+      ],
+      "notes": "当前H库中仅阿里云(28块/442IP)。"
+    },
+    {
+      "id": "android_id_anomaly",
+      "name": "安卓ID复用异常",
+      "emoji": "🚨",
+      "color": "#f85149",
+      "logic": "OR",
+      "description": "安卓ID去重数相对于设备ID(DID)或OAID异常偏高。比值过高说明同一设备使用多个安卓ID（ID重置/伪造）。",
+      "conditions": [
+        {"field": "android_device_ratio", "op": ">=", "value": 1.2, "label": "安卓ID/DID ≥ 1.2"},
+        {"field": "android_oaid_ratio", "op": ">=", "value": 1.5, "label": "安卓ID/OAID ≥ 1.5"}
+      ]
+    },
+    {
+      "id": "app_fraud",
+      "name": "应用造假/刷量嫌疑",
+      "emoji": "🎭",
+      "color": "#d29922",
+      "logic": "OR",
+      "description": "应用种类极少或每OAID上报量异常高。正常网段应用应与设备量正相关，应用极少说明针对特定应用刷量。",
+      "conditions": [
+        {"field": "avg_apps_per_ip", "op": "<=", "value": 3, "label": "均应用/IP ≤ 3"},
+        {"field": "report_oaid_ratio", "op": ">", "value": 20, "label": "上报/OAID > 20"}
+      ]
+    },
+    {
+      "id": "device_fraud",
+      "name": "刷机造假嫌疑",
+      "emoji": "📵",
+      "color": "#da3633",
+      "logic": "AND",
+      "description": "DAA/DNA极低(<3)表示应用活跃种类远少于设备种类。正常网络最低为8，<3为极端异常。典型：少量真实设备模拟大量虚假设备。",
+      "conditions": [
+        {"field": "daa_dna_ratio", "op": "<", "value": 3, "label": "DAA/DNA < 3"}
+      ]
+    },
+    {
+      "id": "wifi_telecom",
+      "name": "正常固定网络·中国电信",
+      "emoji": "🏠",
+      "color": "#a371f7",
+      "logic": "AND",
+      "description": "中国电信固定宽带网络(7,425块)。WiFi占比≥90%，DAA/DNA正常(avg=19.3)，均设备密度avg=97/IP。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国电信", "label": "运营商=中国电信"},
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi占比 ≥ 90%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 6, "label": "DAA/DNA ≥ 6"},
+        {"field": "avg_apps_per_device", "op": ">=", "value": 0.10, "label": "应用/设备 ≥ 0.10"}
+      ]
+    },
+    {
+      "id": "wifi_cmcc",
+      "name": "正常固定网络·中国移动",
+      "emoji": "🏢",
+      "color": "#b392f0",
+      "logic": "AND",
+      "description": "中国移动固定宽带网络(6,872块)。WiFi占比≥90%，DAA/DNA正常(avg=18.7)，均设备密度avg=117/IP。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国移动", "label": "运营商=中国移动"},
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi占比 ≥ 90%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 6, "label": "DAA/DNA ≥ 6"},
+        {"field": "avg_apps_per_device", "op": ">=", "value": 0.10, "label": "应用/设备 ≥ 0.10"}
+      ]
+    },
+    {
+      "id": "wifi_unicom",
+      "name": "正常固定网络·中国联通",
+      "emoji": "🏗️",
+      "color": "#c9b1ff",
+      "logic": "AND",
+      "description": "中国联通固定宽带网络(3,062块)。WiFi占比≥90%，DAA/DNA正常(avg=18.5)，均设备密度avg=177/IP。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国联通", "label": "运营商=中国联通"},
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi占比 ≥ 90%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 6, "label": "DAA/DNA ≥ 6"},
+        {"field": "avg_apps_per_device", "op": ">=", "value": 0.10, "label": "应用/设备 ≥ 0.10"}
+      ]
+    },
+    {
+      "id": "wifi_other",
+      "name": "正常固定网络·其他运营商",
+      "emoji": "🌐",
+      "color": "#d8c9f7",
+      "logic": "AND",
+      "description": "鹏博士/华数/广电/教育网等其他运营商的固定宽带网络。WiFi占比≥90%、DAA/DNA正常。",
+      "conditions": [
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi占比 ≥ 90%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 6, "label": "DAA/DNA ≥ 6"},
+        {"field": "avg_apps_per_device", "op": ">=", "value": 0.10, "label": "应用/设备 ≥ 0.10"}
+      ],
+      "notes": "兜底WiFi标签：鹏博士(73块)、华数(64块)、福建广电(38块)、教育网(17块)等。"
+    }
+  ]
+}

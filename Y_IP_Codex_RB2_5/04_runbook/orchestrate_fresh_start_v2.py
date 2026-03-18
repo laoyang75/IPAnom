@@ -6,16 +6,20 @@ import multiprocessing
 import time
 from datetime import datetime
 from typing import List
+from pathlib import Path
 import psycopg2
 
 # ==========================================
 # Configuration & Constants
 # ==========================================
 
-RUN_ID = "rb20v2_20260202_191900_sg_001"
-CONTRACT_VERSION = "contract_v1"
-SHARD_CNT = 64
-CONCURRENCY = 32  # For per-shard SQL steps
+RUN_ID = os.getenv("RUN_ID", "rb20v2_20260202_191900_sg_001")
+CONTRACT_VERSION = os.getenv("CONTRACT_VERSION", "contract_v1")
+SHARD_CNT = int(os.getenv("SHARD_CNT", "64"))
+CONCURRENCY = int(os.getenv("CONCURRENCY", "32"))
+PHASE2_CONCURRENCY = int(os.getenv("PHASE2_CONCURRENCY", str(CONCURRENCY)))
+PHASE5_CONCURRENCY = int(os.getenv("PHASE5_CONCURRENCY", str(CONCURRENCY)))
+PHASE7_CONCURRENCY = int(os.getenv("PHASE7_CONCURRENCY", "8"))
 
 # Database Connection Info
 os.environ["PGHOST"] = "192.168.200.217"
@@ -33,8 +37,8 @@ DB_CONFIG = {
 }
 
 # Base Paths
-BASE_DIR = "/Users/yangcongan/cursor/2/Y_IP_Codex_RB2_5/03_sql"
-RUNBOOK_DIR = "/Users/yangcongan/cursor/2/Y_IP_Codex_RB2_5/04_runbook"
+RUNBOOK_DIR = str(Path(__file__).resolve().parent)
+BASE_DIR = str(Path(RUNBOOK_DIR).parent / "03_sql")
 
 # Optimization Scripts (Global)
 SCRIPT_STEP03_OPT = f"{RUNBOOK_DIR}/orchestrate_step03_bucket_full.py"
@@ -92,14 +96,14 @@ def exec_sql_file(file_path, replacements, description=""):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"SQL file not found: {file_path}")
     
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
         
     for k, v in replacements.items():
         content = content.replace(k, str(v))
         
     temp_filename = f"/tmp/rb20_exec_{int(time.time()*1000)}_{os.getpid()}.sql"
-    with open(temp_filename, 'w') as f:
+    with open(temp_filename, 'w', encoding='utf-8') as f:
         f.write(content)
         
     try:
@@ -132,6 +136,18 @@ def check_row_count(table, where_clause="1=1"):
     cnt = cur.fetchone()[0]
     conn.close()
     return cnt
+
+
+def get_shard_ids_for_run():
+    conn = get_db_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT shard_id FROM rb20_v2_5.shard_plan WHERE run_id=%s ORDER BY shard_id",
+        (RUN_ID,),
+    )
+    rows = [row[0] for row in cur.fetchall()]
+    conn.close()
+    return rows
 
 # ==========================================
 # Workers
@@ -178,13 +194,14 @@ def worker_phase7(shard_id):
         return (False, shard_id, str(e))
 
 def run_post_process_all_shards():
-    log("Running 03_post_process.sql for all 64 shards...")
+    shard_ids = get_shard_ids_for_run()
+    log(f"Running 03_post_process.sql for {len(shard_ids)} shards...")
     conn = get_db_conn()
     cur = conn.cursor()
-    with open(SQL_STEP03_POST, 'r') as f:
+    with open(SQL_STEP03_POST, 'r', encoding='utf-8') as f:
         template = f.read()
     
-    for sid in range(SHARD_CNT):
+    for sid in shard_ids:
         sql = template.replace("{{run_id}}", RUN_ID)\
                       .replace("{{contract_version}}", CONTRACT_VERSION)\
                       .replace("{{shard_id}}", str(sid))
@@ -204,6 +221,7 @@ def run_post_process_all_shards():
 
 def main():
     log(f"=== Starting COMPLETE FRESH START (Run: {RUN_ID}) ===")
+    effective_shard_cnt = SHARD_CNT
     
     # ---------------------------
     # Phase 0: Explicit Cleanup
@@ -242,15 +260,19 @@ def main():
         "{{contract_version}}": CONTRACT_VERSION
     }, "01A Abnormal Dedup")
     
-    count_sm = check_row_count("rb20_v2_5.source_members", f"run_id='{RUN_ID}'")
-    log(f"Source Members Generated: {count_sm}")
-    
     # ---------------------------
     # Phase 2: Per-Shard Pre-Opt (01, 02)
     # ---------------------------
     log("=== Phase 2: Per-Shard Pre-Optimization (Step 01, Step 02) ===")
-    shards = list(range(SHARD_CNT))
-    with multiprocessing.Pool(CONCURRENCY) as p:
+    shards = get_shard_ids_for_run()
+    effective_shard_cnt = len(shards)
+    if effective_shard_cnt != SHARD_CNT:
+        log(
+            f"NOTICE: shard_plan returned {effective_shard_cnt} shard_ids; "
+            f"configured SHARD_CNT={SHARD_CNT}. Using actual shard count."
+        )
+        os.environ["SHARD_CNT"] = str(effective_shard_cnt)
+    with multiprocessing.Pool(PHASE2_CONCURRENCY) as p:
         results = p.map(worker_phase2, shards)
     
     failures = [r for r in results if not r[0]]
@@ -286,7 +308,7 @@ def main():
     # Phase 5: Per-Shard Post-Opt (04, 04P)
     # ---------------------------
     log("=== Phase 5: Per-Shard Post-Optimization (Step 04, Step 04P) ===")
-    with multiprocessing.Pool(CONCURRENCY) as p:
+    with multiprocessing.Pool(PHASE5_CONCURRENCY) as p:
         results = p.map(worker_phase5, shards)
         
     if any(not r[0] for r in results):
@@ -300,14 +322,14 @@ def main():
     exec_sql_file(SQL_FILES["p6_h_global"], {
         "{{run_id}}": RUN_ID,
         "{{contract_version}}": CONTRACT_VERSION,
-        "{{shard_cnt}}": str(SHARD_CNT)
+        "{{shard_cnt}}": str(effective_shard_cnt)
     }, "Global H")
 
     # ---------------------------
     # Phase 7: Per-Shard Pipeline 2 (06, 07, 08)
     # ---------------------------
-    log("=== Phase 7: Per-Shard Pipeline 2 ===")
-    with multiprocessing.Pool(CONCURRENCY) as p:
+    log(f"=== Phase 7: Per-Shard Pipeline 2 (Concurrency: {PHASE7_CONCURRENCY}) ===")
+    with multiprocessing.Pool(PHASE7_CONCURRENCY) as p:
         results = p.map(worker_phase7, shards)
         
     if any(not r[0] for r in results):
@@ -321,7 +343,7 @@ def main():
     exec_sql_file(SQL_FILES["p8_qa"], {
         "{{run_id}}": RUN_ID,
         "{{contract_version}}": CONTRACT_VERSION,
-        "{{shard_cnt}}": str(SHARD_CNT)
+        "{{shard_cnt}}": str(effective_shard_cnt)
     }, "QA Assert")
     
     log("=== FULL RERUN SUCCESS ===")

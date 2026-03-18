@@ -1,30 +1,110 @@
 """
 Dashboard API — 协同调度看板相关端点
 """
-from fastapi import APIRouter
+import time
+from fastapi import APIRouter, Query
 from models.database import fetch_all, fetch_one
+from services.summary_state import SCHEMA
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
-SCHEMA = "rb20_v2_5"
-
+# --- Simple In-Memory Cache ---
+_cache = {
+    "overview": {},  # {run_id: {"data": ..., "ts": ...}}
+}
+CACHE_TTL = 3600  # 1 hour
 
 @router.get("/runs")
 async def list_runs():
     """获取所有 run_id 列表"""
     rows = await fetch_all(f"""
-        SELECT DISTINCT run_id,
-               MIN(created_at) AS started_at
-        FROM {SCHEMA}.shard_plan
-        GROUP BY run_id
-        ORDER BY started_at DESC
+        WITH runs AS (
+            SELECT run_id, MIN(created_at) AS started_at
+            FROM {SCHEMA}.shard_plan
+            GROUP BY run_id
+        ),
+        h AS (
+            SELECT
+                run_id,
+                COUNT(*)::bigint AS total_rows,
+                COUNT(*) FILTER (
+                    WHERE start_ip_text IS NOT NULL
+                      AND avg_apps_per_ip IS NOT NULL
+                )::bigint AS ready_rows
+            FROM {SCHEMA}.h_block_summary
+            GROUP BY run_id
+        ),
+        e AS (
+            SELECT
+                run_id,
+                COUNT(*)::bigint AS total_rows,
+                COUNT(*) FILTER (
+                    WHERE start_ip_text IS NOT NULL
+                )::bigint AS ready_rows
+            FROM {SCHEMA}.e_cidr_summary
+            GROUP BY run_id
+        ),
+        f AS (
+            SELECT
+                run_id,
+                COUNT(*)::bigint AS total_rows,
+                COUNT(*) FILTER (
+                    WHERE ip_address IS NOT NULL
+                      AND total_reports IS NOT NULL
+                      AND total_devices IS NOT NULL
+                )::bigint AS ready_rows
+            FROM {SCHEMA}.f_ip_summary
+            GROUP BY run_id
+        ),
+        qa AS (
+            SELECT
+                run_id,
+                COUNT(*)::bigint AS qa_total,
+                COUNT(*) FILTER (WHERE pass_flag = true)::bigint AS qa_passed
+            FROM {SCHEMA}.qa_assert
+            GROUP BY run_id
+        )
+        SELECT
+            runs.run_id,
+            runs.started_at,
+            COALESCE(h.total_rows, 0) AS h_summary_total,
+            COALESCE(e.total_rows, 0) AS e_summary_total,
+            COALESCE(f.total_rows, 0) AS f_summary_total,
+            (COALESCE(h.total_rows, 0) > 0 AND COALESCE(h.total_rows, 0) = COALESCE(h.ready_rows, 0)) AS h_summary_ready,
+            (COALESCE(e.total_rows, 0) > 0 AND COALESCE(e.total_rows, 0) = COALESCE(e.ready_rows, 0)) AS e_summary_ready,
+            (COALESCE(f.total_rows, 0) > 0 AND COALESCE(f.total_rows, 0) = COALESCE(f.ready_rows, 0)) AS f_summary_ready,
+            COALESCE(qa.qa_total, 0) AS qa_total,
+            COALESCE(qa.qa_passed, 0) AS qa_passed,
+            (COALESCE(qa.qa_total, 0) > 0 AND COALESCE(qa.qa_total, 0) = COALESCE(qa.qa_passed, 0)) AS qa_all_passed,
+            (
+                (COALESCE(h.total_rows, 0) > 0 AND COALESCE(h.total_rows, 0) = COALESCE(h.ready_rows, 0))
+                AND (COALESCE(e.total_rows, 0) > 0 AND COALESCE(e.total_rows, 0) = COALESCE(e.ready_rows, 0))
+                AND (COALESCE(f.total_rows, 0) > 0 AND COALESCE(f.total_rows, 0) = COALESCE(f.ready_rows, 0))
+            ) AS summary_bundle_ready,
+            (
+                (COALESCE(h.total_rows, 0) > 0 AND COALESCE(h.total_rows, 0) = COALESCE(h.ready_rows, 0))
+                AND (COALESCE(e.total_rows, 0) > 0 AND COALESCE(e.total_rows, 0) = COALESCE(e.ready_rows, 0))
+                AND (COALESCE(f.total_rows, 0) > 0 AND COALESCE(f.total_rows, 0) = COALESCE(f.ready_rows, 0))
+                AND (COALESCE(qa.qa_total, 0) > 0 AND COALESCE(qa.qa_total, 0) = COALESCE(qa.qa_passed, 0))
+            ) AS preferred_for_ui
+        FROM runs
+        LEFT JOIN h USING (run_id)
+        LEFT JOIN e USING (run_id)
+        LEFT JOIN f USING (run_id)
+        LEFT JOIN qa USING (run_id)
+        ORDER BY runs.started_at DESC
     """)
     return rows
 
 
 @router.get("/runs/{run_id}/overview")
-async def run_overview(run_id: str):
-    """单次运行的总览统计"""
+async def run_overview(run_id: str, force_refresh: bool = Query(False)):
+    """单次运行的总览统计（增加缓存）"""
+    now = time.time()
+    if not force_refresh and run_id in _cache["overview"]:
+        if now - _cache["overview"][run_id]["ts"] < CACHE_TTL:
+            return _cache["overview"][run_id]["data"]
+
     stats = await fetch_one(f"""
         SELECT
             :run_id AS run_id,
@@ -40,7 +120,10 @@ async def run_overview(run_id: str):
             (SELECT COUNT(*)::bigint FROM {SCHEMA}.qa_assert WHERE run_id = :run_id) AS qa_total,
             (SELECT COUNT(*)::bigint FROM {SCHEMA}.qa_assert WHERE run_id = :run_id AND pass_flag = true) AS qa_passed
     """, {"run_id": run_id})
-    return stats
+    
+    res = dict(stats) if stats else {}
+    _cache["overview"][run_id] = {"data": res, "ts": now}
+    return res
 
 
 @router.get("/runs/{run_id}/shards")

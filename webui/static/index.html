@@ -23,21 +23,34 @@
                 <button class="nav-tab" :class="{active: currentTab === 'dashboard'}" @click="currentTab = 'dashboard'">
                     📊 协同看板
                 </button>
+                <button class="nav-tab" :class="{active: currentTab === 'lab' && labLib==='h'}"
+                    @click="currentTab = 'lab'; labLib='h'; initLab()">
+                    🔵 H 库
+                </button>
+                <button class="nav-tab" :class="{active: currentTab === 'lab' && labLib==='e'}"
+                    @click="currentTab = 'lab'; labLib='e'; initLab()">
+                    🟣 E 库
+                </button>
+                <button class="nav-tab" :class="{active: currentTab === 'lab' && labLib==='f'}"
+                    @click="currentTab = 'lab'; labLib='f'; initLab()">
+                    🟢 F 库
+                </button>
                 <button class="nav-tab" :class="{active: currentTab === 'explorer'}" @click="currentTab = 'explorer'">
                     🔍 数据探查
                 </button>
                 <button class="nav-tab" :class="{active: currentTab === 'qa'}" @click="currentTab = 'qa'">
                     ✅ QA 断言
                 </button>
-                <button class="nav-tab" :class="{active: currentTab === 'lab'}" @click="currentTab = 'lab'; initLab()">
-                    🧪 库画像研究
-                </button>
             </nav>
             <div class="header-meta">
                 <span>Run:</span>
-                <select class="run-selector" v-model="selectedRunId" @change="loadRunData">
+                <select class="run-selector" v-model="selectedRunId" @change="handleRunChange">
                     <option v-for="r in runs" :value="r.run_id">{{ r.run_id }}</option>
                 </select>
+                <span v-if="selectedRunMeta"
+                    :style="{color: selectedRunMeta.summary_bundle_ready ? 'var(--accent-green)' : 'var(--accent-yellow)', fontWeight: 700}">
+                    {{ selectedRunMeta.summary_bundle_ready ? '摘要就绪' : '摘要未齐' }}
+                </span>
             </div>
         </header>
 
@@ -50,6 +63,12 @@
 
             <!-- ══════════ Dashboard Tab ══════════ -->
             <template v-if="currentTab === 'dashboard' && !loading">
+                <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+                    <button class="btn" @click="loadRunData(true)"
+                        style="background:var(--accent-blue); padding:4px 12px; font-size:0.8rem">
+                        🔄 强制同步最新数据
+                    </button>
+                </div>
                 <!-- KPI Cards -->
                 <div class="kpi-row">
                     <div class="kpi-card kpi-source" style="animation-delay: 0s">
@@ -191,6 +210,135 @@
                     <input class="search-input" v-model="searchQuery" @keyup.enter="doSearch"
                         placeholder="输入 IP 地址 (如 1.2.3.4) 或 ip_long 整数 或 block_id...">
                     <button class="btn" @click="doSearch">🔍 查询</button>
+                </div>
+
+                <!-- IP 邻域搜索 -->
+                <div class="panel" style="margin-bottom:1.5rem">
+                    <div class="panel-header">
+                        <h3>🔬 IP 邻域搜索（原始IP源表）</h3>
+                        <p style="margin:4px 0 0; font-size:0.75rem; color:var(--text-muted); line-height:1.4">
+                            💡 E 库最小粒度 /27（32 IP），且 IP <b>不连续</b>，部分 IP 可能不在源表中。搜索 E 库 CIDR 段起始 IP 时系统会自动定位到段内实际成员。
+                        </p>
+                    </div>
+                    <div class="panel-body">
+                        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+                            <input class="search-input" v-model="nbIp" @keyup.enter="doNbSearch"
+                                placeholder="输入 IP 地址，如 140.240.0.1" style="flex:1; min-width:200px">
+                            <label style="font-size:0.82rem; color:var(--text-secondary)">前后</label>
+                            <select v-model="nbRadius" class="lib-selector" style="width:70px">
+                                <option v-for="n in [4,8,16,32,64]" :value="n">{{ n }}</option>
+                            </select>
+                            <label style="font-size:0.82rem; color:var(--text-secondary)">个IP</label>
+                            <button class="btn" @click="doNbSearch" :disabled="nbLoading">
+                                {{ nbLoading ? '⏳ ...' : '🔬 搜索邻域' }}
+                            </button>
+                        </div>
+                        <!-- Results -->
+                        <template v-if="nbResult">
+                            <div
+                                style="margin-top:1rem; padding:10px 14px; background:var(--bg-tertiary); border-radius:var(--radius-md)">
+                                <span style="font-size:0.85rem">输入: <strong style="color:var(--accent-blue)">{{
+                                        nbResult.ip }}</strong></span>
+                                <span style="margin-left:16px; font-size:0.82rem; color:var(--text-secondary)">
+                                    共 {{ nbResult.total }} 条 (前后 {{ nbResult.radius }} 个)
+                                </span>
+                                <span v-if="nbResult.h_block"
+                                    style="margin-left:16px; font-size:0.82rem; color:var(--accent-green)">
+                                    ✅ H库: {{ nbResult.h_block.block_id_final }} ({{ nbResult.h_block.ip_count }} IP,
+                                    异常{{ nbResult.h_block.abnormal_ip_count || 0 }})
+                                </span>
+                                <span v-if="nbResult.e_block"
+                                    style="margin-left:16px; font-size:0.82rem; color:var(--accent-purple, #bc8cff)">
+                                    🟣 E库: {{ nbResult.e_block.e_run_id }} ({{ nbResult.e_block.ip_count }} IP,
+                                    {{ nbResult.e_block.network_tier_final || '?' }} | 评分:{{
+                                    nbResult.e_block.simple_score ?? '?' }} |
+                                    {{ nbResult.e_block.top_operator || '?' }})
+                                </span>
+                                <span v-if="!nbResult.h_block && !nbResult.e_block"
+                                    style="margin-left:16px; font-size:0.82rem; color:var(--text-muted)">
+                                    ⚪ 不在 H库/E库 中
+                                </span>
+                            </div>
+                            <div v-if="nbResult.cidr_redirect"
+                                style="margin-top:0.5rem; padding:6px 12px; background:rgba(188,140,255,0.1); border-left:3px solid var(--accent-purple, #bc8cff); border-radius:var(--radius-sm); font-size:0.8rem; color:var(--accent-purple, #bc8cff)">
+                                📍 {{ nbResult.cidr_redirect.reason }}，已自动定位到 <strong>{{
+                                    nbResult.cidr_redirect.redirected_to }}</strong>
+                            </div>
+                            <div
+                                style="overflow-x:auto; max-height:480px; overflow-y:auto; margin-top:0.8rem; position:relative">
+                                <table class="compare-table h-detail-table"
+                                    style="font-size:0.72rem; white-space:nowrap">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left">IP</th>
+                                            <th>库</th>
+                                            <th>上报</th>
+                                            <th>过滤前上报</th>
+                                            <th>设备</th>
+                                            <th>过滤前设备</th>
+                                            <th>应用</th>
+                                            <th>活跃天</th>
+                                            <th style="color:var(--accent-green)">DAA</th>
+                                            <th style="color:var(--accent-red)">DNA</th>
+                                            <th>工作时</th>
+                                            <th>工作日</th>
+                                            <th>周末</th>
+                                            <th>深夜</th>
+                                            <th>WiFi设</th>
+                                            <th>移动设</th>
+                                            <th>VPN</th>
+                                            <th>安卓ID</th>
+                                            <th>OAID</th>
+                                            <th>型号</th>
+                                            <th>代理</th>
+                                            <th>Root</th>
+                                            <th>ADB</th>
+                                            <th>充电</th>
+                                            <th>运营商</th>
+                                            <th>国家</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="(r, idx) in nbResult.rows" :key="idx"
+                                            :style="{background: r.is_target ? 'rgba(88,166,255,0.15)' : r.lib === 'E' ? 'rgba(188,140,255,0.08)' : '', borderLeft: r.is_target ? '3px solid var(--accent-blue)' : r.lib === 'E' ? '3px solid rgba(188,140,255,0.4)' : ''}">
+                                            <td class="font-mono" style="text-align:left"
+                                                :style="{color: r.is_target ? 'var(--accent-blue)' : '', fontWeight: r.is_target ? '700' : ''}">
+                                                {{ r.ip_text || '—' }}</td>
+                                            <td
+                                                :style="{color: r.lib === 'E' ? 'var(--accent-purple, #bc8cff)' : 'var(--text-muted)', fontWeight: r.lib ? '700' : '', fontSize: '0.7rem'}">
+                                                {{ r.lib || '—' }}</td>
+                                            <td>{{ formatNum(r['上报次数']) }}</td>
+                                            <td style="color:var(--text-secondary)">{{ formatNum(r['过滤前上报次数']) }}</td>
+                                            <td>{{ formatNum(r['设备数量']) }}</td>
+                                            <td style="color:var(--text-secondary)">{{ formatNum(r['过滤前设备数量']) }}</td>
+                                            <td>{{ r['应用数量'] }}</td>
+                                            <td>{{ r['活跃天数'] }}</td>
+                                            <td style="color:var(--accent-green)">{{ formatNum(r['DAA业务上报次数']) }}</td>
+                                            <td style="color:var(--accent-red)">{{ formatNum(r['DNA业务上报次数']) }}</td>
+                                            <td>{{ formatNum(r['工作时上报次数']) }}</td>
+                                            <td>{{ formatNum(r['工作日上报次数']) }}</td>
+                                            <td>{{ formatNum(r['周末上报次数']) }}</td>
+                                            <td>{{ formatNum(r['深夜上报次数']) }}</td>
+                                            <td>{{ formatNum(r['WiFi设备数量']) }}</td>
+                                            <td>{{ formatNum(r['移动网络设备数量']) }}</td>
+                                            <td>{{ formatNum(r['VPN设备数量']) }}</td>
+                                            <td>{{ formatNum(r['安卓ID数量']) }}</td>
+                                            <td>{{ formatNum(r['OAID数量']) }}</td>
+                                            <td>{{ r['型号数量'] }}</td>
+                                            <td :style="{color: r['代理上报次数'] > 0 ? 'var(--accent-red)' : ''}">{{
+                                                formatNum(r['代理上报次数']) }}</td>
+                                            <td :style="{color: r['Root设备上报次数'] > 0 ? 'var(--accent-red)' : ''}">{{
+                                                formatNum(r['Root设备上报次数']) }}</td>
+                                            <td>{{ formatNum(r['ADB调试上报次数']) }}</td>
+                                            <td>{{ formatNum(r['充电状态上报次数']) }}</td>
+                                            <td style="font-size:0.68rem">{{ r['IP归属运营商'] || '—' }}</td>
+                                            <td style="font-size:0.68rem">{{ r['IP归属国家'] || '—' }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </template>
+                    </div>
                 </div>
 
                 <!-- Search Result -->
@@ -431,33 +579,433 @@
                 </div>
             </template>
 
+            <!-- ══════════ Profiling Tab ══════════ -->
+            <template v-if="false && currentTab === 'profiling'">
+                <!-- Funnel Overview -->
+                <div class="kpi-row" style="margin-bottom:1.5rem">
+                    <div class="kpi-card">
+                        <div class="kpi-icon">📦</div>
+                        <div class="kpi-label">全量 Block</div>
+                        <div class="kpi-value">{{ formatNum(funnelData.total?.blocks) }}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">🌐</div>
+                        <div class="kpi-label">全量 IP</div>
+                        <div class="kpi-value">{{ formatNum(funnelData.total?.ips) }}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">🏷️</div>
+                        <div class="kpi-label">已定义标签</div>
+                        <div class="kpi-value">{{ funnelData.tag_count || 0 }}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">❓</div>
+                        <div class="kpi-label">剩余未标记</div>
+                        <div class="kpi-value" style="color:var(--accent-yellow)">{{ formatNum(funnelRemaining.blocks)
+                            }} 块</div>
+                        <div class="kpi-sub" style="font-size:0.75rem; color:var(--text-secondary)">{{
+                            formatNum(funnelRemaining.ips) }} IP</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">🌐</div>
+                        <div class="kpi-label">IP 覆盖率</div>
+                        <div class="kpi-value" style="color:var(--accent-green)">{{ funnelCoveredIpPct }}%</div>
+                        <div class="kpi-sub" style="font-size:0.75rem; color:var(--text-secondary)">{{
+                            formatNum(funnelCoveredIps) }} / {{ formatNum(funnelData.total?.ips) }}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon">📊</div>
+                        <div class="kpi-label">上报覆盖率</div>
+                        <div class="kpi-value" style="color:var(--accent-blue)">{{ funnelCoveredReportPct }}%</div>
+                        <div class="kpi-sub" style="font-size:0.75rem; color:var(--text-secondary)">{{
+                            formatNum(funnelCoveredReports) }} / {{ formatNum(funnelData.total?.reports) }}</div>
+                    </div>
+                </div>
+
+                <!-- Funnel Visual -->
+                <div class="panel" style="margin-bottom:1.5rem">
+                    <div class="panel-header">
+                        <h3>🔻 漏斗分层（按顺序执行）</h3>
+                        <button class="btn" style="padding:4px 12px; font-size:0.78rem" @click="loadFunnel()">🔄
+                            刷新</button>
+                    </div>
+                    <div class="panel-body">
+                        <!-- 3 Progress Bars: Blocks / IP / Reports -->
+                        <div v-for="barType in [
+                            {key: 'blocks', label: '📦 CIDR 块', totalKey: 'blocks'},
+                            {key: 'ips', label: '🌐 IP 覆盖', totalKey: 'ips'},
+                            {key: 'reports', label: '📊 上报覆盖', totalKey: 'reports'}
+                        ]" :key="barType.key" style="margin-bottom:10px">
+                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:3px">
+                                <span
+                                    style="font-size:0.75rem; font-weight:700; min-width:80px; color:var(--text-secondary)">{{
+                                    barType.label }}</span>
+                                <span style="font-size:0.72rem; color:var(--accent-green); font-weight:700">{{
+                                    funnelBarPct(barType.key) }}%</span>
+                                <span style="font-size:0.68rem; color:var(--text-secondary)">{{
+                                    formatNum(funnelBarCovered(barType.key)) }} / {{
+                                    formatNum(funnelData.total?.[barType.totalKey]) }}</span>
+                            </div>
+                            <div
+                                style="position:relative; height:28px; background:var(--bg-tertiary); border-radius:6px; overflow:hidden">
+                                <template v-for="(step, idx) in funnelData.funnel" :key="step.tag.id + barType.key">
+                                    <div :style="{
+                                        position: 'absolute',
+                                        left: funnelBarLeftBy(idx, barType.key) + '%',
+                                        width: funnelBarWidthBy(idx, barType.key) + '%',
+                                        height: '100%', background: step.tag.color, opacity: 0.85,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        fontSize: '0.68rem', fontWeight: '700', color: '#fff',
+                                        borderRight: '1px solid var(--bg-primary)',
+                                    }">
+                                        {{ funnelBarWidthBy(idx, barType.key) > 6 ? step.tag.emoji + ' ' +
+                                        formatNum(step.matched[barType.key]) : '' }}
+                                    </div>
+                                </template>
+                                <div :style="{
+                                    position: 'absolute', right: 0,
+                                    width: Math.max(0, 100 - parseFloat(funnelBarPct(barType.key))) + '%',
+                                    height: '100%', background: 'var(--bg-secondary)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontSize: '0.68rem', color: 'var(--text-secondary)',
+                                }">
+                                    {{ Math.max(0, 100 - parseFloat(funnelBarPct(barType.key))) > 5 ? '❓ ' +
+                                    formatNum(funnelData.total?.[barType.totalKey] - funnelBarCovered(barType.key)) : ''
+                                    }}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tag cards -->
+                        <div v-for="(step, idx) in funnelData.funnel" :key="step.tag.id"
+                            style="border:1px solid var(--border-color); border-radius:10px; padding:16px 20px; margin-bottom:12px; background:var(--bg-tertiary)">
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px">
+                                <div>
+                                    <span style="font-size:1.2rem">{{ step.tag.emoji }}</span>
+                                    <strong style="font-size:1rem; margin-left:6px">{{ step.tag.name }}</strong>
+                                    <span
+                                        style="margin-left:10px; font-size:0.78rem; padding:2px 8px; border-radius:10px; font-weight:700"
+                                        :style="{background: step.tag.color + '33', color: step.tag.color}">
+                                        #{{ idx + 1 }}
+                                    </span>
+                                </div>
+                                <div style="display:flex; gap:16px; font-size:0.85rem">
+                                    <span><strong :style="{color: step.tag.color}">{{ formatNum(step.matched.blocks)
+                                            }}</strong> 块</span>
+                                    <span><strong>{{ formatNum(step.matched.ips) }}</strong> IP</span>
+                                    <span>{{ formatNum(step.matched.devices) }} 设备</span>
+                                    <span>{{ formatNum(step.matched.reports) }} 上报</span>
+                                    <span style="color:var(--text-secondary)">→ 剩余 {{ formatNum(step.remaining.blocks)
+                                        }} 块</span>
+                                </div>
+                            </div>
+                            <div style="margin-top:8px; font-size:0.8rem; color:var(--text-secondary); line-height:1.5">
+                                {{ step.tag.description }}
+                            </div>
+                            <!-- Conditions -->
+                            <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center">
+                                <span style="font-size:0.73rem; padding:3px 8px; border-radius:6px; font-weight:700"
+                                    :style="{background: step.tag.logic === 'OR' ? '#f8514933' : '#3fb95033', color: step.tag.logic === 'OR' ? '#f85149' : '#3fb950'}">
+                                    {{ step.tag.logic || 'AND' }}
+                                </span>
+                                <span v-for="c in step.tag.conditions" :key="c.field + c.op"
+                                    style="font-size:0.73rem; padding:3px 10px; border-radius:6px; background:var(--bg-secondary); border:1px solid var(--border-color); font-family:var(--font-mono)">
+                                    {{ c.label || (c.field + ' ' + c.op + ' ' + c.value) }}
+                                </span>
+                            </div>
+                            <div v-if="step.tag.notes"
+                                style="margin-top:8px; font-size:0.73rem; color:var(--accent-blue); font-style:italic">
+                                💡 {{ step.tag.notes }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Remaining Pool Stats -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h3>📊 剩余池分位数分析（{{ formatNum(funnelRemaining.blocks) }} 块）</h3>
+                        <button class="btn" style="padding:4px 12px; font-size:0.78rem" @click="loadRemainingStats()">🔄
+                            分析</button>
+                    </div>
+                    <div class="panel-body" style="overflow-x:auto">
+                        <table v-if="remainingStats.length" class="compare-table h-detail-table"
+                            style="font-size:0.78rem">
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left">指标</th>
+                                    <th>MIN</th>
+                                    <th>P50</th>
+                                    <th>P85</th>
+                                    <th>P90</th>
+                                    <th>P95</th>
+                                    <th>MAX</th>
+                                    <th>AVG</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="s in remainingStats" :key="s.metric">
+                                    <td style="text-align:left; font-family:var(--font-mono); font-weight:600">{{
+                                        metricLabel(s.metric) }}</td>
+                                    <td style="color:var(--text-secondary)">{{ s.min }}</td>
+                                    <td>{{ s.p50 }}</td>
+                                    <td style="font-weight:700">{{ s.p85 }}</td>
+                                    <td style="font-weight:700; color:var(--accent-blue)">{{ s.p90 }}</td>
+                                    <td style="font-weight:700; color:var(--accent-yellow)">{{ s.p95 }}</td>
+                                    <td style="color:var(--text-secondary)">{{ s.max }}</td>
+                                    <td>{{ s.avg }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div v-else style="text-align:center; padding:2rem; color:var(--text-secondary)">
+                            点击「🔄 分析」加载剩余池的分位数统计
+                        </div>
+                    </div>
+                </div>
+            </template>
+
             <!-- ══════════ Library Lab Tab ══════════ -->
             <template v-if="currentTab === 'lab' && !loading">
                 <div class="lab-header">
-                    <h2>🧪 库画像研究
-                        <select class="lib-selector" v-model="labLib" @change="loadLabData">
-                            <option value="h">🟠 H 库 (中型网络)</option>
-                            <option value="e">🟣 E 库 (密集原子)</option>
-                            <option value="f">🟢 F 库 (剩余散点)</option>
-                        </select>
-                    </h2>
+                    <h2 v-if="labLib==='h'">🔵 H 库 - 核心连续网络库</h2>
+                    <h2 v-else-if="labLib==='e'">🟣 E 库 - 稀疏聚合网络库</h2>
+                    <h2 v-else>🟢 F 库 - 零散剩余 IP 库</h2>
+                    <div v-if="labLib==='e'"
+                        style="margin-top:0.5rem; padding:8px 14px; background:rgba(188,140,255,0.08); border-left:3px solid var(--accent-purple, #bc8cff); border-radius:var(--radius-sm); font-size:0.78rem; color:var(--text-secondary); line-height:1.5">
+                        <strong style="color:var(--accent-purple, #bc8cff)">📐 E 库特性</strong>：最小粒度为 <strong>/27
+                            atom</strong>（32 IP），CIDR 段由 1~N 个连续 atom 拼合而成。
+                        E 库 IP <strong>不连续</strong>——同一段内的成员 IP 可能跳跃分布，段与段之间也存在空隙。搜索特定 IP 时可能出现“未找到”的情况，属正常现象。
+                    </div>
+                    <div v-if="labLib==='f'"
+                        style="margin-top:0.5rem; padding:8px 14px; background:rgba(57,210,192,0.08); border-left:3px solid var(--accent-cyan); border-radius:var(--radius-sm); font-size:0.78rem; color:var(--text-secondary); line-height:1.5">
+                        <strong style="color:var(--accent-cyan)">🧩 F 库特性</strong>：F 库以 <strong>单 IP</strong> 为研究单位，不再按块/CIDR 展示。
+                        页面优先消费 <strong>f_ip_summary</strong>，用于查看零散剩余 IP 的画像与风险特征。
+                    </div>
                 </div>
                 <div class="sub-tabs">
+                    <!-- H 库：块摘要优先 -->
+                    <button v-if="labLib==='h'" class="sub-tab" :class="{active: labSub==='summary'}"
+                        @click="labSub='summary'; loadHSummary()">📝 块摘要画像</button>
+
+                    <!-- H/E 库：画像标签 -->
+                    <button v-if="labLib==='h' || labLib==='e'" class="sub-tab" :class="{active: labSub==='profiling'}"
+                        @click="labSub='profiling'; loadFunnel()">🏷️ 画像标签</button>
+
+                    <!-- E 库：CIDR 摘要画像 -->
+                    <button v-if="labLib==='e'" class="sub-tab" :class="{active: labSub==='summary'}"
+                        @click="labSub='summary'; loadESummary()">📝 块摘要画像</button>
+
+                    <!-- F 库：IP 摘要画像 -->
+                    <button v-if="labLib==='f'" class="sub-tab" :class="{active: labSub==='summary'}"
+                        @click="labSub='summary'; loadFSummary()">📝 IP 摘要画像</button>
+
                     <button class="sub-tab" :class="{active: labSub==='overview'}" @click="labSub='overview'">📋
-                        概览</button>
-                    <button class="sub-tab" :class="{active: labSub==='profile'}"
-                        @click="labSub='profile'; renderProfileCharts()">📊 画像</button>
-                    <button class="sub-tab" :class="{active: labSub==='flow'}"
-                        @click="labSub='flow'; renderFlowCharts()">🔀 流转</button>
+                        库总览</button>
+
+                    <button v-if="labLib==='h'" class="sub-tab" :class="{active: labSub==='profile'}"
+                        @click="labSub='profile'; loadTagDistribution()">📊 画像标签分布</button>
                     <button class="sub-tab" :class="{active: labSub==='issues'}"
-                        @click="labSub='issues'; loadIssues()">⚠️ 问题</button>
-                    <button class="sub-tab" :class="{active: labSub==='deep'}"
-                        @click="labSub='deep'; loadDeepAnalysis()">🔬 H深度</button>
-                    <button class="sub-tab" :class="{active: labSub==='samples'}"
-                        @click="labSub='samples'; loadSamples()">🧬 样本</button>
-                    <button class="sub-tab" :class="{active: labSub==='rules'}"
-                        @click="labSub='rules'; loadRulePacks()">📦 Rules</button>
+                        @click="labSub='issues'; loadIssues()">⚠️ 问题检测</button>
                 </div>
+
+                <!-- ── Profiling Sub (画像标签) ── -->
+                <template v-if="labSub==='profiling'">
+                    <!-- Funnel Overview KPIs -->
+                    <div class="kpi-row" style="margin-bottom:1.5rem">
+                        <div class="kpi-card">
+                            <div class="kpi-icon">📦</div>
+                            <div class="kpi-label">全量 Block</div>
+                            <div class="kpi-value">{{ formatNum(funnelData.total?.blocks) }}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon">🌐</div>
+                            <div class="kpi-label">全量 IP</div>
+                            <div class="kpi-value">{{ formatNum(funnelData.total?.ips) }}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon">🏷️</div>
+                            <div class="kpi-label">已定义标签</div>
+                            <div class="kpi-value">{{ funnelData.tag_count || 0 }}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon">❓</div>
+                            <div class="kpi-label">剩余未标记</div>
+                            <div class="kpi-value" style="color:var(--accent-yellow)">{{
+                                formatNum(funnelRemaining.blocks) }} 块</div>
+                            <div class="kpi-sub" style="font-size:0.75rem; color:var(--text-secondary)">{{
+                                formatNum(funnelRemaining.ips) }} IP</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon">🌐</div>
+                            <div class="kpi-label">IP 覆盖率</div>
+                            <div class="kpi-value" style="color:var(--accent-green)">{{ funnelCoveredIpPct }}%</div>
+                            <div class="kpi-sub" style="font-size:0.75rem; color:var(--text-secondary)">{{
+                                formatNum(funnelCoveredIps) }} / {{ formatNum(funnelData.total?.ips) }}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon">📊</div>
+                            <div class="kpi-label">上报覆盖率</div>
+                            <div class="kpi-value" style="color:var(--accent-blue)">{{ funnelCoveredReportPct }}%</div>
+                            <div class="kpi-sub" style="font-size:0.75rem; color:var(--text-secondary)">{{
+                                formatNum(funnelCoveredReports) }} / {{ formatNum(funnelData.total?.reports) }}</div>
+                        </div>
+                    </div>
+
+                    <div v-if="funnelData.summary_status && funnelData.summary_status.state !== 'ready'"
+                        style="margin-bottom:1rem; padding:12px 16px; background:rgba(210,153,34,0.12); border-left:4px solid var(--accent-yellow); border-radius:var(--radius-md); color:var(--text-primary);">
+                        <div style="font-weight:700; margin-bottom:4px;">当前 run 的画像摘要还不能驱动标签页</div>
+                        <div style="font-size:0.82rem; color:var(--text-secondary); line-height:1.5;">
+                            {{ funnelData.message || funnelData.summary_status.message }}
+                            <span v-if="funnelData.summary_status.fallback_run_id">
+                                可切换到 run <strong style="color:var(--accent-blue)">{{ funnelData.summary_status.fallback_run_id }}</strong> 查看完整画像标签。
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Funnel Visual -->
+                    <div class="panel" style="margin-bottom:1.5rem">
+                        <div class="panel-header">
+                            <h3>🔻 漏斗分层（按顺序执行）</h3>
+                            <button class="btn" style="padding:4px 12px; font-size:0.78rem" @click="loadFunnel()">🔄
+                                刷新</button>
+                        </div>
+                        <div class="panel-body">
+                            <!-- 3 Progress Bars -->
+                            <div v-for="barType in [
+                                {key: 'blocks', label: '📦 CIDR 块', totalKey: 'blocks'},
+                                {key: 'ips', label: '🌐 IP 覆盖', totalKey: 'ips'},
+                                {key: 'reports', label: '📊 上报覆盖', totalKey: 'reports'}
+                            ]" :key="barType.key" style="margin-bottom:10px">
+                                <div style="display:flex; align-items:center; gap:8px; margin-bottom:3px">
+                                    <span
+                                        style="font-size:0.75rem; font-weight:700; min-width:80px; color:var(--text-secondary)">{{
+                                        barType.label }}</span>
+                                    <span style="font-size:0.72rem; color:var(--accent-green); font-weight:700">{{
+                                        funnelBarPct(barType.key) }}%</span>
+                                    <span style="font-size:0.68rem; color:var(--text-secondary)">{{
+                                        formatNum(funnelBarCovered(barType.key)) }} / {{
+                                        formatNum(funnelData.total?.[barType.totalKey]) }}</span>
+                                </div>
+                                <div
+                                    style="position:relative; height:28px; background:var(--bg-tertiary); border-radius:6px; overflow:hidden">
+                                    <template v-for="(step, idx) in funnelData.funnel" :key="step.tag.id + barType.key">
+                                        <div :style="{
+                                            position: 'absolute',
+                                            left: funnelBarLeftBy(idx, barType.key) + '%',
+                                            width: funnelBarWidthBy(idx, barType.key) + '%',
+                                            height: '100%', background: step.tag.color, opacity: 0.85,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            fontSize: '0.68rem', fontWeight: '700', color: '#fff',
+                                            borderRight: '1px solid var(--bg-primary)',
+                                        }">
+                                            {{ funnelBarWidthBy(idx, barType.key) > 6 ? step.tag.emoji + ' ' +
+                                            formatNum(step.matched[barType.key]) : '' }}
+                                        </div>
+                                    </template>
+                                    <div :style="{
+                                        position: 'absolute', right: 0,
+                                        width: Math.max(0, 100 - parseFloat(funnelBarPct(barType.key))) + '%',
+                                        height: '100%', background: 'var(--bg-secondary)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        fontSize: '0.68rem', color: 'var(--text-secondary)',
+                                    }">
+                                        {{ Math.max(0, 100 - parseFloat(funnelBarPct(barType.key))) > 5 ? '❓ ' +
+                                        formatNum(funnelData.total?.[barType.totalKey] - funnelBarCovered(barType.key))
+                                        : '' }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Tag cards -->
+                            <div v-for="(step, idx) in funnelData.funnel" :key="step.tag.id"
+                                style="border:1px solid var(--border-color); border-radius:10px; padding:16px 20px; margin-bottom:12px; background:var(--bg-tertiary)">
+                                <div
+                                    style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px">
+                                    <div>
+                                        <span style="font-size:1.2rem">{{ step.tag.emoji }}</span>
+                                        <strong style="font-size:1rem; margin-left:6px">{{ step.tag.name }}</strong>
+                                        <span
+                                            style="margin-left:10px; font-size:0.78rem; padding:2px 8px; border-radius:10px; font-weight:700"
+                                            :style="{background: step.tag.color + '33', color: step.tag.color}">
+                                            #{{ idx + 1 }}
+                                        </span>
+                                    </div>
+                                    <div style="display:flex; gap:16px; font-size:0.85rem">
+                                        <span><strong :style="{color: step.tag.color}">{{ formatNum(step.matched.blocks)
+                                                }}</strong> 块</span>
+                                        <span><strong>{{ formatNum(step.matched.ips) }}</strong> IP</span>
+                                        <span>{{ formatNum(step.matched.devices) }} 设备</span>
+                                        <span>{{ formatNum(step.matched.reports) }} 上报</span>
+                                        <span style="color:var(--text-secondary)">→ 剩余 {{
+                                            formatNum(step.remaining.blocks) }} 块</span>
+                                    </div>
+                                </div>
+                                <div
+                                    style="margin-top:8px; font-size:0.8rem; color:var(--text-secondary); line-height:1.5">
+                                    {{ step.tag.description }}
+                                </div>
+                                <!-- Conditions -->
+                                <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center">
+                                    <span style="font-size:0.73rem; padding:3px 8px; border-radius:6px; font-weight:700"
+                                        :style="{background: step.tag.logic === 'OR' ? '#f8514933' : '#3fb95033', color: step.tag.logic === 'OR' ? '#f85149' : '#3fb950'}">
+                                        {{ step.tag.logic || 'AND' }}
+                                    </span>
+                                    <span v-for="c in step.tag.conditions" :key="c.field + c.op"
+                                        style="font-size:0.73rem; padding:3px 10px; border-radius:6px; background:var(--bg-secondary); border:1px solid var(--border-color); font-family:var(--font-mono)">
+                                        {{ c.label || (c.field + ' ' + c.op + ' ' + c.value) }}
+                                    </span>
+                                </div>
+                                <div v-if="step.tag.notes"
+                                    style="margin-top:8px; font-size:0.73rem; color:var(--accent-blue); font-style:italic">
+                                    💡 {{ step.tag.notes }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Remaining Pool Stats -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3>📊 剩余池分位数分析（{{ formatNum(funnelRemaining.blocks) }} 块）</h3>
+                            <button class="btn" style="padding:4px 12px; font-size:0.78rem"
+                                @click="loadRemainingStats()">🔄 分析</button>
+                        </div>
+                        <div class="panel-body" style="overflow-x:auto">
+                            <table v-if="remainingStats.length" class="compare-table h-detail-table"
+                                style="font-size:0.78rem">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align:left">指标</th>
+                                        <th>MIN</th>
+                                        <th>P50</th>
+                                        <th>P85</th>
+                                        <th>P90</th>
+                                        <th>P95</th>
+                                        <th>MAX</th>
+                                        <th>AVG</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="s in remainingStats" :key="s.metric">
+                                        <td style="text-align:left; font-family:var(--font-mono); font-weight:600">{{
+                                            metricLabel(s.metric) }}</td>
+                                        <td style="color:var(--text-secondary)">{{ s.min }}</td>
+                                        <td>{{ s.p50 }}</td>
+                                        <td style="font-weight:700">{{ s.p85 }}</td>
+                                        <td style="font-weight:700; color:var(--accent-blue)">{{ s.p90 }}</td>
+                                        <td style="font-weight:700; color:var(--accent-yellow)">{{ s.p95 }}</td>
+                                        <td style="color:var(--text-secondary)">{{ s.max }}</td>
+                                        <td>{{ s.avg }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <div v-else style="text-align:center; padding:2rem; color:var(--text-secondary)">
+                                点击「🔄 分析」加载剩余池的分位数统计
+                            </div>
+                        </div>
+                    </div>
+                </template>
 
                 <!-- ── Overview Sub ── -->
                 <template v-if="labSub==='overview'">
@@ -600,129 +1148,899 @@
                     </div>
                 </template>
 
-                <!-- ── Profile Sub ── -->
-                <template v-if="labSub==='profile'">
-                    <div class="grid-2">
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>📈 上报次数分布</h3>
-                            </div>
-                            <div class="panel-body">
-                                <div id="chart-reports" class="chart-container"></div>
-                            </div>
-                        </div>
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>📈 设备数量分布</h3>
-                            </div>
-                            <div class="panel-body">
-                                <div id="chart-devices" class="chart-container"></div>
+                <!-- ── Summary Sub ── -->
+                <template v-if="labSub==='summary'">
+                    <!-- ====== H 库摘要 ====== -->
+                    <template v-if="labLib==='h'">
+                        <div v-if="hSummaryStatus.state && hSummaryStatus.state !== 'ready'"
+                            style="margin-bottom:1rem; padding:12px 16px; background:rgba(210,153,34,0.12); border-left:4px solid var(--accent-yellow); border-radius:var(--radius-md); color:var(--text-primary);">
+                            <div style="font-weight:700; margin-bottom:4px;">H 库摘要当前不可直接使用</div>
+                            <div style="font-size:0.82rem; color:var(--text-secondary); line-height:1.5;">
+                                {{ hSummaryStatus.message }}
+                                <span v-if="hSummaryStatus.fallback_run_id">
+                                    可切换到 run <strong style="color:var(--accent-blue)">{{ hSummaryStatus.fallback_run_id }}</strong> 查看完整 H 摘要。
+                                </span>
                             </div>
                         </div>
-                    </div>
-                    <div class="grid-2">
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>📈 运营商 Top15</h3>
+                        <!-- H 库宏观 KPI 卡片区 -->
+                        <div v-if="hKpi.total_blocks" class="kpi-row" style="margin-bottom:1.5rem">
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-blue)">
+                                <div class="kpi-label">Block 总数</div>
+                                <div class="kpi-value">{{ formatNum(hKpi.total_blocks) }}</div>
                             </div>
-                            <div class="panel-body">
-                                <div id="chart-op-bar" class="chart-container"></div>
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-green)">
+                                <div class="kpi-label">IP 总数</div>
+                                <div class="kpi-value">{{ formatNum(hKpi.total_ips) }}</div>
+                                <div class="kpi-sub">平均 {{ hKpi.avg_ip_per_block }} / 块</div>
+                            </div>
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-yellow, #d29922)">
+                                <div class="kpi-label">平均 Score</div>
+                                <div class="kpi-value">{{ hKpi.avg_score }}</div>
+                                <div class="kpi-sub">密度 {{ hKpi.avg_density }}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">总上报</div>
+                                <div class="kpi-value">{{ formatNum(hKpi.total_reports) }}</div>
+                                <div class="kpi-sub">DAA {{ formatNum(hKpi.total_daa) }} | DNA {{
+                                    formatNum(hKpi.total_dna) }}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">总设备</div>
+                                <div class="kpi-value">{{ formatNum(hKpi.total_devices) }}</div>
+                                <div class="kpi-sub">WiFi {{ formatNum(hKpi.total_wifi_devices) }} | 移动 {{
+                                    formatNum(hKpi.total_mobile_devices) }}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">平均活跃天数</div>
+                                <div class="kpi-value">{{ hKpi.avg_active_days }}</div>
                             </div>
                         </div>
+
+                        <!-- H 库 Block 明细表 -->
                         <div class="panel">
                             <div class="panel-header">
-                                <h3>📈 {{ labLib==='h'?'Simple Score':'移动设备比例' }} 分布</h3>
+                                <h3>📝 H 库 Block 属性明细表 ({{ hSummaryTotal }} 块)</h3>
+                                <div style="display:flex; gap:8px; align-items:center">
+                                    <span style="font-size:0.72rem; color:var(--text-secondary)">点击表头排序</span>
+                                    <button class="btn" style="padding:2px 8px; font-size:0.75rem;"
+                                        @click="hSummaryDesc=!hSummaryDesc; hSummaryPage=1; loadHSummary()">
+                                        {{ hSummaryDesc ? '⬇ 降序' : '⬆ 升序' }}
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- 复合筛选栏 -->
+                            <div
+                                style="padding:8px 16px; background:var(--bg-tertiary); border-bottom:1px solid var(--border-color); display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:0.82rem">
+                                <span style="color:var(--text-secondary)">🔎 筛选:</span>
+                                <select v-model="hFilterCol" class="lib-selector"
+                                    style="width:150px; font-size:0.78rem">
+                                    <option value="">选择列...</option>
+                                    <option value="density">密度</option>
+                                    <option value="ip_count">IP数</option>
+                                    <option value="total_reports">总上报</option>
+                                    <option value="total_devices">总设备</option>
+                                    <option value="avg_reports_per_ip">均上/IP</option>
+                                    <option value="avg_devices_per_ip">均设备/IP</option>
+                                    <option value="avg_active_days">活跃天</option>
+                                    <option value="avg_apps_per_ip">均应用/IP</option>
+                                    <option value="avg_model_per_ip">均型号/IP</option>
+                                    <option value="avg_manufacturer_per_ip">均制造商/IP</option>
+                                    <option value="daa_dna_ratio">DAA/DNA</option>
+                                    <option value="wifi_device_ratio">WiFi比</option>
+                                    <option value="mobile_device_ratio">移动比</option>
+                                    <option value="vpn_device_ratio">VPN比</option>
+                                    <option value="late_night_report_ratio">深夜比</option>
+                                    <option value="workday_report_ratio">工作日比</option>
+                                    <option value="abnormal_ip_count">异常IP</option>
+                                    <option value="abnormal_ip_ratio">异常比</option>
+                                    <option value="android_device_ratio">安卓/设备</option>
+                                    <option value="oaid_device_ratio">OAID/设备</option>
+                                    <option value="android_oaid_ratio">安卓ID/OAID</option>
+                                    <option value="report_oaid_ratio">上报/OAID</option>
+                                    <option value="proxy_reports">代理</option>
+                                    <option value="root_reports">Root</option>
+                                    <option value="adb_reports">ADB</option>
+                                    <option value="abnormal_net_devices">异常网络设备</option>
+                                    <option value="charging_reports">充电上报</option>
+                                    <option value="max_single_device_reports">单设备最大</option>
+                                </select>
+                                <input v-model="hFilterMin" type="number" step="any" placeholder="最小值"
+                                    style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.78rem">
+                                <span style="color:var(--text-muted)">~</span>
+                                <input v-model="hFilterMax" type="number" step="any" placeholder="最大值"
+                                    style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.78rem">
+                                <button class="btn" style="padding:4px 12px; font-size:0.78rem"
+                                    @click="hSummaryPage=1; loadHSummary()">应用</button>
+                                <button class="btn" style="padding:4px 12px; font-size:0.78rem; opacity:0.7"
+                                    @click="hFilterCol=''; hFilterMin=''; hFilterMax=''; hSummaryPage=1; loadHSummary()">清除</button>
+                                <span v-if="hFilterCol" style="color:var(--accent-green); font-size:0.75rem">
+                                    ✅ {{ hFilterCol }} [{{ hFilterMin || '∞' }} ~ {{ hFilterMax || '∞' }}] → {{
+                                    hSummaryTotal }} 块
+                                </span>
+                                <label
+                                    style="display:flex; align-items:center; gap:4px; margin-left:auto; cursor:pointer; font-size:0.78rem; color:var(--accent-yellow)">
+                                    <input type="checkbox" v-model="hExcludeTagged"
+                                        @change="hSummaryPage=1; loadHSummary()">
+                                    🏷️ 排除已知标签
+                                </label>
+                            </div>
+                            <div class="panel-body"
+                                style="overflow-x:auto; max-height:520px; overflow-y:auto; position:relative">
+                                <table class="compare-table h-detail-table"
+                                    style="font-size:0.73rem; white-space:nowrap">
+                                    <thead>
+                                        <tr>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='start_ip_text'}"
+                                                @click="hClickSort('start_ip_text')" style="text-align:left">起始IP</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='density'}"
+                                                @click="hClickSort('density')">密度</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='ip_count'}"
+                                                @click="hClickSort('ip_count')">IP数</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='total_reports'}"
+                                                @click="hClickSort('total_reports')">总上报</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='total_reports_pre_filter'}"
+                                                @click="hClickSort('total_reports_pre_filter')">过滤前上报</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='total_devices'}"
+                                                @click="hClickSort('total_devices')">总设备</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='total_devices_pre_filter'}"
+                                                @click="hClickSort('total_devices_pre_filter')">过滤前设备</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='daa_reports'}"
+                                                @click="hClickSort('daa_reports')">DAA</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='dna_reports'}"
+                                                @click="hClickSort('dna_reports')">DNA</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='worktime_reports'}"
+                                                @click="hClickSort('worktime_reports')">工作时</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='workday_reports'}"
+                                                @click="hClickSort('workday_reports')">工作日</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='weekend_reports'}"
+                                                @click="hClickSort('weekend_reports')">周末</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='late_night_reports'}"
+                                                @click="hClickSort('late_night_reports')">深夜</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='wifi_devices'}"
+                                                @click="hClickSort('wifi_devices')">WiFi设</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='mobile_devices'}"
+                                                @click="hClickSort('mobile_devices')">移动设</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='vpn_devices'}"
+                                                @click="hClickSort('vpn_devices')">VPN设</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='wired_devices'}"
+                                                @click="hClickSort('wired_devices')">有线设</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='abnormal_net_devices'}"
+                                                @click="hClickSort('abnormal_net_devices')"
+                                                style="color:var(--accent-red)">异常网络设备</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='avg_apps_per_ip'}"
+                                                @click="hClickSort('avg_apps_per_ip')">均应用/IP</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='android_id_count'}"
+                                                @click="hClickSort('android_id_count')">安卓ID</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='oaid_count'}"
+                                                @click="hClickSort('oaid_count')">OAID</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='google_id_count'}"
+                                                @click="hClickSort('google_id_count')">谷歌ID</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='avg_model_per_ip'}"
+                                                @click="hClickSort('avg_model_per_ip')">均型号</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='avg_manufacturer_per_ip'}"
+                                                @click="hClickSort('avg_manufacturer_per_ip')">均制造商</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='android_device_ratio'}"
+                                                @click="hClickSort('android_device_ratio')"
+                                                style="color:var(--accent-yellow)">安卓/设备</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='oaid_device_ratio'}"
+                                                @click="hClickSort('oaid_device_ratio')"
+                                                style="color:var(--accent-yellow)">OAID/设备</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='android_oaid_ratio'}"
+                                                @click="hClickSort('android_oaid_ratio')"
+                                                style="color:var(--accent-yellow)">安卓/OAID</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='report_oaid_ratio'}"
+                                                @click="hClickSort('report_oaid_ratio')"
+                                                style="color:var(--accent-yellow)">上报/OAID</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='proxy_reports'}"
+                                                @click="hClickSort('proxy_reports')">代理</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='root_reports'}"
+                                                @click="hClickSort('root_reports')">Root</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='adb_reports'}"
+                                                @click="hClickSort('adb_reports')">ADB</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='charging_reports'}"
+                                                @click="hClickSort('charging_reports')">充电</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='max_single_device_reports'}"
+                                                @click="hClickSort('max_single_device_reports')">单设备最大</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='avg_reports_per_ip'}"
+                                                @click="hClickSort('avg_reports_per_ip')">均上/IP</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='avg_devices_per_ip'}"
+                                                @click="hClickSort('avg_devices_per_ip')">均设/IP</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='avg_active_days'}"
+                                                @click="hClickSort('avg_active_days')">均天</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='wifi_device_ratio'}"
+                                                @click="hClickSort('wifi_device_ratio')">WiFi比</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='mobile_device_ratio'}"
+                                                @click="hClickSort('mobile_device_ratio')">移动比</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='vpn_device_ratio'}"
+                                                @click="hClickSort('vpn_device_ratio')">VPN比</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='workday_report_ratio'}"
+                                                @click="hClickSort('workday_report_ratio')">工作日比</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='late_night_report_ratio'}"
+                                                @click="hClickSort('late_night_report_ratio')">深夜比</th>
+                                            <th class="sortable-th" :class="{sorted: hSummarySort==='daa_dna_ratio'}"
+                                                @click="hClickSort('daa_dna_ratio')">DAA/DNA</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='abnormal_ip_count'}"
+                                                @click="hClickSort('abnormal_ip_count')"
+                                                style="color:var(--accent-red)">⚠️异常IP</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: hSummarySort==='abnormal_ip_ratio'}"
+                                                @click="hClickSort('abnormal_ip_ratio')"
+                                                style="color:var(--accent-red)">异常比</th>
+
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="b in hSummary" :key="b.block_id_final">
+                                            <td class="font-mono ip-copyable"
+                                                style="font-size:0.68rem; color:var(--accent-blue); text-align:left; cursor:pointer"
+                                                @click="copyIp(b.start_ip_text)" :title="'点击复制 ' + b.start_ip_text">{{
+                                                b.start_ip_text || '—' }}</td>
+                                            <td>{{ b.density }}</td>
+                                            <td style="font-weight:700">{{ formatNum(b.ip_count) }}</td>
+                                            <td>{{ formatNum(b.total_reports) }}</td>
+                                            <td style="color:var(--text-secondary)">{{
+                                                formatNum(b.total_reports_pre_filter) }}</td>
+                                            <td>{{ formatNum(b.total_devices) }}</td>
+                                            <td style="color:var(--text-secondary)">{{
+                                                formatNum(b.total_devices_pre_filter) }}</td>
+                                            <td style="color:var(--accent-green)">{{ formatNum(b.daa_reports) }}</td>
+                                            <td style="color:var(--accent-red)">{{ formatNum(b.dna_reports) }}</td>
+                                            <td>{{ formatNum(b.worktime_reports) }}</td>
+                                            <td>{{ formatNum(b.workday_reports) }}</td>
+                                            <td>{{ formatNum(b.weekend_reports) }}</td>
+                                            <td>{{ formatNum(b.late_night_reports) }}</td>
+                                            <td>{{ formatNum(b.wifi_devices) }}</td>
+                                            <td>{{ formatNum(b.mobile_devices) }}</td>
+                                            <td>{{ formatNum(b.vpn_devices) }}</td>
+                                            <td>{{ formatNum(b.wired_devices) }}</td>
+                                            <td
+                                                :style="{color: b.abnormal_net_devices > 0 ? 'var(--accent-red)' : '', fontWeight: b.abnormal_net_devices > 0 ? '700' : ''}">
+                                                {{ formatNum(b.abnormal_net_devices) }}</td>
+                                            <td>{{ b.avg_apps_per_ip || '—' }}</td>
+                                            <td>{{ formatNum(b.android_id_count) }}</td>
+                                            <td>{{ formatNum(b.oaid_count) }}</td>
+                                            <td>{{ formatNum(b.google_id_count) }}</td>
+                                            <td>{{ b.avg_model_per_ip || '—' }}</td>
+                                            <td>{{ b.avg_manufacturer_per_ip || '—' }}</td>
+                                            <td
+                                                :style="{color: b.android_device_ratio > 1.3 ? 'var(--accent-red)' : '', fontWeight: b.android_device_ratio > 1.3 ? '700' : ''}">
+                                                {{ b.android_device_ratio || '—' }}</td>
+                                            <td
+                                                :style="{color: b.oaid_device_ratio > 1.0 ? 'var(--accent-red)' : '', fontWeight: b.oaid_device_ratio > 1.0 ? '700' : ''}">
+                                                {{ b.oaid_device_ratio || '—' }}</td>
+                                            <td
+                                                :style="{color: b.android_oaid_ratio > 1.5 ? 'var(--accent-red)' : '', fontWeight: b.android_oaid_ratio > 1.5 ? '700' : ''}">
+                                                {{ b.android_oaid_ratio || '—' }}</td>
+                                            <td
+                                                :style="{color: b.report_oaid_ratio > 20 ? 'var(--accent-red)' : '', fontWeight: b.report_oaid_ratio > 20 ? '700' : ''}">
+                                                {{ b.report_oaid_ratio || '—' }}</td>
+                                            <td :style="{color: b.proxy_reports > 0 ? 'var(--accent-red)' : ''}">{{
+                                                formatNum(b.proxy_reports) }}</td>
+                                            <td :style="{color: b.root_reports > 0 ? 'var(--accent-red)' : ''}">{{
+                                                formatNum(b.root_reports) }}</td>
+                                            <td
+                                                :style="{color: b.adb_reports > 0 ? 'var(--accent-yellow, #d29922)' : ''}">
+                                                {{ formatNum(b.adb_reports) }}</td>
+                                            <td>{{ formatNum(b.charging_reports) }}</td>
+                                            <td>{{ formatNum(b.max_single_device_reports) }}</td>
+                                            <td>{{ b.avg_reports_per_ip }}</td>
+                                            <td>{{ b.avg_devices_per_ip }}</td>
+                                            <td>{{ b.avg_active_days }}</td>
+                                            <td>{{ (b.wifi_device_ratio * 100).toFixed(1) }}%</td>
+                                            <td>{{ (b.mobile_device_ratio * 100).toFixed(1) }}%</td>
+                                            <td>{{ (b.vpn_device_ratio * 100).toFixed(1) }}%</td>
+                                            <td>{{ (b.workday_report_ratio * 100).toFixed(1) }}%</td>
+                                            <td
+                                                :style="{color: b.late_night_report_ratio > 0.1 ? 'var(--accent-red)' : ''}">
+                                                {{ (b.late_night_report_ratio * 100).toFixed(1) }}%</td>
+                                            <td>{{ b.daa_dna_ratio }}</td>
+                                            <td
+                                                :style="{color: b.abnormal_ip_count > 0 ? 'var(--accent-red)' : '', fontWeight: b.abnormal_ip_count > 0 ? '700' : ''}">
+                                                {{ formatNum(b.abnormal_ip_count) }}</td>
+                                            <td :style="{color: b.abnormal_ip_ratio > 0.05 ? 'var(--accent-red)' : ''}">
+                                                {{ b.abnormal_ip_ratio ? (b.abnormal_ip_ratio * 100).toFixed(1) + '%' :
+                                                '0%' }}</td>
+
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <!-- Pagination -->
+                                <div
+                                    style="margin-top:1rem; display:flex; justify-content:center; align-items:center; gap:16px;">
+                                    <button class="btn" :disabled="hSummaryPage <= 1"
+                                        @click="hSummaryPage--; loadHSummary()">上一页</button>
+                                    <span style="font-size:0.85rem; color:var(--text-secondary)">
+                                        第 {{ hSummaryPage }} 页 / 共 {{ Math.ceil(hSummaryTotal / 50) || 1 }} 页 (总计 {{
+                                        hSummaryTotal }})
+                                    </span>
+                                    <button class="btn" :disabled="hSummaryPage * 50 >= hSummaryTotal"
+                                        @click="hSummaryPage++; loadHSummary()">下一页</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 字段管理工作台 -->
+                        <div class="panel" style="margin-top:1.5rem; border:1px solid var(--accent-blue, #58a6ff)">
+                            <div class="panel-header" style="background: rgba(88,166,255,0.08)">
+                                <h3>🛠️ 字段管理工作台</h3>
+                                <div style="display:flex; gap:8px; align-items:center">
+                                    <span style="font-size:0.75rem; color:var(--text-secondary)">
+                                        已选 {{ fieldWorkbench.fields.filter(f=>f.keep).length }} / {{
+                                        fieldWorkbench.fields.length }} 字段
+                                    </span>
+                                    <button class="btn"
+                                        style="padding:4px 12px; font-size:0.75rem; background:var(--accent-blue); color:#fff"
+                                        @click="submitFieldConfig()">
+                                        💾 提交保存
+                                    </button>
+                                </div>
                             </div>
                             <div class="panel-body">
-                                <div id="chart-extra" class="chart-container"></div>
+                                <!-- Section 1: 字段审阅 -->
+                                <details open>
+                                    <summary
+                                        style="cursor:pointer; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem; color:var(--accent-blue)">
+                                        📋 字段审阅（勾选=保留，取消=建议删除，右侧写意见）
+                                    </summary>
+                                    <div style="max-height:400px; overflow-y:auto; padding:0.5rem">
+                                        <table class="compare-table" style="font-size:0.75rem">
+                                            <thead>
+                                                <tr>
+                                                    <th style="width:40px">保留</th>
+                                                    <th style="width:180px">字段名</th>
+                                                    <th style="width:100px">分类</th>
+                                                    <th>含义</th>
+                                                    <th style="width:250px">你的意见</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="f in fieldWorkbench.fields" :key="f.name">
+                                                    <td><input type="checkbox" v-model="f.keep"></td>
+                                                    <td class="font-mono" style="font-size:0.7rem"
+                                                        :style="{color: f.keep ? 'var(--accent-green)' : 'var(--text-secondary)', textDecoration: f.keep ? 'none' : 'line-through'}">
+                                                        {{ f.name }}</td>
+                                                    <td style="font-size:0.68rem; color:var(--text-secondary)">{{
+                                                        f.category }}</td>
+                                                    <td style="font-size:0.68rem">{{ f.desc }}</td>
+                                                    <td><input type="text" v-model="f.comment" placeholder="写意见…"
+                                                            style="width:100%; background:var(--surface-2, #22272e); border:1px solid var(--border, #444); color:var(--text-primary, #e6edf3); padding:2px 6px; border-radius:4px; font-size:0.72rem">
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </details>
+
+                                <!-- Section 2: 自定义计算列 -->
+                                <details open style="margin-top:1rem">
+                                    <summary
+                                        style="cursor:pointer; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem; color:var(--accent-yellow, #d29922)">
+                                        ➕ 自定义计算列（新增字段 = 字段A ○ 字段B）
+                                    </summary>
+                                    <div style="padding:0.5rem">
+                                        <div v-for="(cc, idx) in fieldWorkbench.computed" :key="idx"
+                                            style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap">
+                                            <input type="text" v-model="cc.resultName" placeholder="新列名"
+                                                style="width:140px; background:var(--surface-2, #22272e); border:1px solid var(--border, #444); color:var(--text-primary, #e6edf3); padding:4px 8px; border-radius:4px; font-size:0.75rem; font-weight:700">
+                                            <span style="font-size:0.75rem; color:var(--text-secondary)"> = </span>
+                                            <select v-model="cc.fieldA"
+                                                style="width:160px; background:var(--surface-2, #22272e); border:1px solid var(--border, #444); color:var(--text-primary, #e6edf3); padding:4px; border-radius:4px; font-size:0.72rem">
+                                                <option value="" disabled>选择字段A</option>
+                                                <option v-for="f in fieldWorkbench.fields.filter(x=>x.keep)"
+                                                    :key="f.name" :value="f.name">{{ f.name }}</option>
+                                            </select>
+                                            <select v-model="cc.op"
+                                                style="width:50px; background:var(--surface-2, #22272e); border:1px solid var(--border, #444); color:var(--accent-yellow, #d29922); padding:4px; border-radius:4px; font-size:0.85rem; font-weight:700; text-align:center">
+                                                <option value="+">+</option>
+                                                <option value="-">−</option>
+                                                <option value="*">×</option>
+                                                <option value="/">÷</option>
+                                            </select>
+                                            <select v-model="cc.fieldB"
+                                                style="width:160px; background:var(--surface-2, #22272e); border:1px solid var(--border, #444); color:var(--text-primary, #e6edf3); padding:4px; border-radius:4px; font-size:0.72rem">
+                                                <option value="" disabled>选择字段B</option>
+                                                <option v-for="f in fieldWorkbench.fields.filter(x=>x.keep)"
+                                                    :key="f.name" :value="f.name">{{ f.name }}</option>
+                                            </select>
+                                            <input type="text" v-model="cc.comment" placeholder="用途说明"
+                                                style="flex:1; min-width:120px; background:var(--surface-2, #22272e); border:1px solid var(--border, #444); color:var(--text-primary, #e6edf3); padding:4px 8px; border-radius:4px; font-size:0.72rem">
+                                            <button @click="fieldWorkbench.computed.splice(idx,1)"
+                                                style="background:transparent; border:1px solid var(--accent-red); color:var(--accent-red); border-radius:4px; padding:2px 8px; cursor:pointer; font-size:0.75rem">✕</button>
+                                        </div>
+                                        <button class="btn" style="padding:4px 16px; font-size:0.75rem; margin-top:4px"
+                                            @click="fieldWorkbench.computed.push({resultName:'', fieldA:'', op:'/', fieldB:'', comment:''})">
+                                            + 添加计算列
+                                        </button>
+                                    </div>
+                                </details>
+
+                                <!-- 提交状态 -->
+                                <div v-if="fieldWorkbench.lastSaved"
+                                    style="margin-top:0.8rem; padding:8px 12px; background:rgba(63,185,80,0.1); border-radius:6px; font-size:0.78rem; color:var(--accent-green)">
+                                    ✅ 已保存: {{ fieldWorkbench.lastSaved }}
+                                </div>
                             </div>
+                        </div>
+                    </template>
+
+                    <!-- ====== E 库摘要 ====== -->
+                    <template v-else-if="labLib==='e'">
+                        <div v-if="eSummaryStatus.state && eSummaryStatus.state !== 'ready'"
+                            style="margin-bottom:1rem; padding:12px 16px; background:rgba(210,153,34,0.12); border-left:4px solid var(--accent-yellow); border-radius:var(--radius-md); color:var(--text-primary);">
+                            <div style="font-weight:700; margin-bottom:4px;">E 库摘要当前不可直接使用</div>
+                            <div style="font-size:0.82rem; color:var(--text-secondary); line-height:1.5;">
+                                {{ eSummaryStatus.message }}
+                                <span v-if="eSummaryStatus.fallback_run_id">
+                                    可切换到 run <strong style="color:var(--accent-blue)">{{ eSummaryStatus.fallback_run_id }}</strong> 查看完整 E 摘要。
+                                </span>
+                            </div>
+                        </div>
+                    <!-- E 库宏观 KPI 卡片区 -->
+                    <div v-if="eKpi.total_runs" class="kpi-row" style="margin-bottom:1.5rem">
+                        <div class="kpi-card" style="border-left:3px solid var(--accent-purple, #bc8cff)">
+                            <div class="kpi-label">CIDR 块总数</div>
+                            <div class="kpi-value">{{ formatNum(eKpi.total_runs) }}</div>
+                        </div>
+                        <div class="kpi-card" style="border-left:3px solid var(--accent-blue)">
+                            <div class="kpi-label">IP 总数</div>
+                            <div class="kpi-value">{{ formatNum(eKpi.total_ips) }}</div>
+                            <div class="kpi-sub">平均 {{ eKpi.avg_ip_per_run }} / 块</div>
+                        </div>
+                        <div class="kpi-card" style="border-left:3px solid var(--accent-green)">
+                            <div class="kpi-label">总上报</div>
+                            <div class="kpi-value">{{ formatNum(eKpi.total_reports) }}</div>
+                            <div class="kpi-sub">DAA {{ formatNum(eKpi.total_daa) }} | DNA {{ formatNum(eKpi.total_dna)
+                                }}</div>
+                        </div>
+                        <div class="kpi-card" style="border-left:3px solid var(--accent-yellow, #d29922)">
+                            <div class="kpi-label">总设备</div>
+                            <div class="kpi-value">{{ formatNum(eKpi.total_devices) }}</div>
+                            <div class="kpi-sub">WiFi {{ formatNum(eKpi.total_wifi_devices) }} | 移动 {{
+                                formatNum(eKpi.total_mobile_devices) }}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">平均 Run 长度</div>
+                            <div class="kpi-value">{{ eKpi.avg_run_len }}</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-label">平均活跃天数</div>
+                            <div class="kpi-value">{{ eKpi.avg_active_days }}</div>
                         </div>
                     </div>
 
-                    <div class="grid-2" v-if="labLib==='h'" style="margin-top:1.5rem">
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>📈 H Block 散点图 (密度 vs Valid个数)</h3>
-                            </div>
-                            <div class="panel-body">
-                                <div id="chart-scatter" class="chart-container-lg"></div>
-                            </div>
-                        </div>
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>📦 运营商密度箱线图 (Top 5)</h3>
-                            </div>
-                            <div class="panel-body">
-                                <div id="chart-boxplot" class="chart-container-lg"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="panel" v-if="labLib==='e' && eSuspicious.length" style="margin-top:1.5rem">
+                    <!-- CIDR 块明细表 -->
+                    <div class="panel">
                         <div class="panel-header">
-                            <h3>🔍 E 库可疑连续段 (Top 50)</h3>
+                            <h3>📝 E 库 CIDR 属性明细表 ({{ eSummaryTotal }} 段)</h3>
+                            <div style="display:flex; gap:8px; align-items:center">
+                                <span style="font-size:0.72rem; color:var(--text-secondary)">点击表头排序</span>
+                                <button class="btn" style="padding:2px 8px; font-size:0.75rem;"
+                                    @click="eSummaryDesc=!eSummaryDesc; eSummaryPage=1; loadESummary()">
+                                    {{ eSummaryDesc ? '⬇ 降序' : '⬆ 升序' }}
+                                </button>
+                            </div>
                         </div>
-                        <div class="panel-body">
-                            <p style="color:var(--text-secondary);font-size:0.8rem;margin-bottom:0.8rem">
-                                连打长度 ≥ 3，但平均被识别原子的有效 IP 数较低 (< 4)。可能包含低质长段。 </p>
-                                    <table class="compare-table" style="font-size:0.8rem">
-                                        <thead>
-                                            <tr>
-                                                <th>Block ID Final</th>
-                                                <th>Run Len (连打)</th>
-                                                <th>原成员数</th>
-                                                <th>平均 Valid IP</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr v-for="r in eSuspicious" :key="r.block_id_final">
-                                                <td class="font-mono">{{ r.block_id_final }}</td>
-                                                <td>{{ r.run_len }}</td>
-                                                <td>{{ formatNum(r.member_cnt) }}</td>
-                                                <td style="color:var(--accent-red)">{{ r.avg_valid_cnt }}</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                        </div>
-                    </div>
+                        <!-- 复合筛选栏 -->
+                        <div
+                            style="padding:8px 16px; background:var(--bg-tertiary); border-bottom:1px solid var(--border-color); display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:0.82rem">
+                            <span style="color:var(--text-secondary)">🔎 筛选:</span>
+                            <select v-model="eFilterCol" class="lib-selector" style="width:150px; font-size:0.78rem">
+                                <option value="">选择列...</option>
+                                <option value="ip_density">密度</option>
+                                <option value="ip_count">IP数</option>
+                                <option value="total_reports">总上报</option>
+                                <option value="total_devices">总设备</option>
+                                <option value="avg_reports_per_ip">均上/IP</option>
+                                <option value="avg_devices_per_ip">均设备/IP</option>
+                                <option value="avg_active_days">活跃天</option>
+                                <option value="avg_apps_per_device">均应用/设备</option>
+                                <option value="avg_apps_per_ip">均应用/IP</option>
+                                <option value="daa_dna_ratio">DAA/DNA</option>
+                                <option value="wifi_device_ratio">WiFi比</option>
+                                <option value="mobile_device_ratio">移动比</option>
+                                <option value="vpn_device_ratio">VPN比</option>
+                                <option value="late_night_report_ratio">深夜比</option>
+                                <option value="workday_report_ratio">工作日比</option>
 
-                    <div class="panel" v-if="labLib==='f' && fOpportunities.length" style="margin-top:1.5rem">
-                        <div class="panel-header">
-                            <h3>🔍 F 库机会带 (Top 50)</h3>
+                                <option value="proxy_reports">代理</option>
+                                <option value="root_reports">Root</option>
+                                <option value="adb_reports">ADB</option>
+                                <option value="run_len">Run长度</option>
+                            </select>
+                            <input v-model="eFilterMin" type="number" step="any" placeholder="最小值"
+                                style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.78rem">
+                            <span style="color:var(--text-muted)">~</span>
+                            <input v-model="eFilterMax" type="number" step="any" placeholder="最大值"
+                                style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.78rem">
+                            <button class="btn" style="padding:4px 12px; font-size:0.78rem"
+                                @click="eSummaryPage=1; loadESummary()">应用</button>
+                            <button class="btn" style="padding:4px 12px; font-size:0.78rem; opacity:0.7"
+                                @click="eFilterCol=''; eFilterMin=''; eFilterMax=''; eSummaryPage=1; loadESummary()">清除</button>
+                            <span v-if="eFilterCol" style="color:var(--accent-green); font-size:0.75rem">
+                                ✅ {{ eFilterCol }} [{{ eFilterMin || '∞' }} ~ {{ eFilterMax || '∞' }}] → {{
+                                eSummaryTotal }} 段
+                            </span>
+                            <label
+                                style="display:flex; align-items:center; gap:4px; margin-left:auto; cursor:pointer; font-size:0.78rem; color:var(--accent-yellow)">
+                                <input type="checkbox" v-model="eExcludeTagged"
+                                    @change="eSummaryPage=1; loadESummary()">
+                                🏷️ 排除已知标签
+                            </label>
                         </div>
-                        <div class="panel-body">
-                            <p style="color:var(--text-secondary);font-size:0.8rem;margin-bottom:0.8rem">
-                                被打入 F 库，但在对应 E Atom 中 Valid IP 数量较高 (≥ 5)。可能通过微调阈值进入 E 库。
-                            </p>
-                            <table class="compare-table" style="font-size:0.8rem">
+                        <div class="panel-body"
+                            style="overflow-x:auto; max-height:520px; overflow-y:auto; position:relative">
+                            <table class="compare-table h-detail-table" style="font-size:0.73rem; white-space:nowrap">
                                 <thead>
                                     <tr>
-                                        <th>IP Long (F 成员)</th>
-                                        <th>Block ID Final</th>
-                                        <th>所属原子的 Valid IP</th>
-                                        <th>所属原子总规模</th>
-                                        <th>操作</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='start_ip_text'}"
+                                            @click="eClickSort('start_ip_text')" style="text-align:left">起始IP</th>
+
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='ip_density'}"
+                                            @click="eClickSort('ip_density')">密度</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='ip_count'}"
+                                            @click="eClickSort('ip_count')">IP数</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='run_len'}"
+                                            @click="eClickSort('run_len')">Run长</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='total_reports'}"
+                                            @click="eClickSort('total_reports')">总上报</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='total_devices'}"
+                                            @click="eClickSort('total_devices')">总设备</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='daa_reports'}"
+                                            @click="eClickSort('daa_reports')">DAA</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='dna_reports'}"
+                                            @click="eClickSort('dna_reports')">DNA</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='wifi_devices'}"
+                                            @click="eClickSort('wifi_devices')">WiFi设</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='mobile_devices'}"
+                                            @click="eClickSort('mobile_devices')">移动设</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='vpn_devices'}"
+                                            @click="eClickSort('vpn_devices')">VPN设</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='avg_apps_per_device'}"
+                                            @click="eClickSort('avg_apps_per_device')">均应用/设备</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='avg_apps_per_ip'}"
+                                            @click="eClickSort('avg_apps_per_ip')">均应用/IP</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='avg_reports_per_ip'}"
+                                            @click="eClickSort('avg_reports_per_ip')">均上/IP</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='avg_devices_per_ip'}"
+                                            @click="eClickSort('avg_devices_per_ip')">均设/IP</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='wifi_device_ratio'}"
+                                            @click="eClickSort('wifi_device_ratio')">WiFi比</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='mobile_device_ratio'}"
+                                            @click="eClickSort('mobile_device_ratio')">移动比</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='workday_report_ratio'}"
+                                            @click="eClickSort('workday_report_ratio')">工作日比</th>
+                                        <th class="sortable-th"
+                                            :class="{sorted: eSummarySort==='late_night_report_ratio'}"
+                                            @click="eClickSort('late_night_report_ratio')">深夜比</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='daa_dna_ratio'}"
+                                            @click="eClickSort('daa_dna_ratio')">DAA/DNA</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='avg_active_days'}"
+                                            @click="eClickSort('avg_active_days')">均天</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='proxy_reports'}"
+                                            @click="eClickSort('proxy_reports')" style="color:var(--accent-red)">代理</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='root_reports'}"
+                                            @click="eClickSort('root_reports')" style="color:var(--accent-red)">Root
+                                        </th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='adb_reports'}"
+                                            @click="eClickSort('adb_reports')">ADB</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='unstable_ip_count'}"
+                                            @click="eClickSort('unstable_ip_count')">不稳定</th>
+                                        <th class="sortable-th" :class="{sorted: eSummarySort==='manufacturer_count'}"
+                                            @click="eClickSort('manufacturer_count')">制造商</th>
+                                        <th>运营商</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="opp in fOpportunities" :key="opp.ip_long">
-                                        <td class="font-mono">{{ opp.ip_long }}</td>
-                                        <td class="font-mono">{{ opp.block_id_final }}</td>
-                                        <td style="color:var(--accent-green)">{{ opp.valid_ip_cnt }}</td>
-                                        <td>{{ opp.atom_size }}</td>
-                                        <td>
-                                            <button class="btn" style="padding:2px 8px;font-size:0.7rem"
-                                                @click="jumpToExplorer(opp.ip_long)">详情</button>
+                                    <tr v-for="b in eSummary" :key="b.e_run_id">
+                                        <td class="font-mono"
+                                            style="font-size:0.68rem; cursor:pointer; color:var(--accent-blue)"
+                                            @click="copyIp(b.start_ip_text)" :title="'点击复制: ' + b.start_ip_text">{{
+                                            b.start_ip_text || b.e_run_id }}</td>
+
+                                        <td>{{ b.ip_density }}</td>
+                                        <td style="font-weight:700">{{ formatNum(b.ip_count) }}</td>
+                                        <td>{{ b.run_len }}</td>
+                                        <td>{{ formatNum(b.total_reports) }}</td>
+                                        <td>{{ formatNum(b.total_devices) }}</td>
+                                        <td style="color:var(--accent-green)">{{ formatNum(b.daa_reports) }}</td>
+                                        <td style="color:var(--accent-red)">{{ formatNum(b.dna_reports) }}</td>
+                                        <td>{{ formatNum(b.wifi_devices) }}</td>
+                                        <td>{{ formatNum(b.mobile_devices) }}</td>
+                                        <td>{{ formatNum(b.vpn_devices) }}</td>
+                                        <td>{{ b.avg_apps_per_device != null ? Number(b.avg_apps_per_device).toFixed(2)
+                                            : '—' }}</td>
+                                        <td>{{ b.avg_apps_per_ip != null ? Number(b.avg_apps_per_ip).toFixed(2) : '—' }}
                                         </td>
+                                        <td>{{ b.avg_reports_per_ip }}</td>
+                                        <td>{{ b.avg_devices_per_ip }}</td>
+                                        <td>{{ b.wifi_device_ratio != null ? (b.wifi_device_ratio * 100).toFixed(1) +
+                                            '%' : '—' }}</td>
+                                        <td>{{ b.mobile_device_ratio != null ? (b.mobile_device_ratio * 100).toFixed(1)
+                                            + '%' : '—' }}</td>
+                                        <td>{{ b.workday_report_ratio != null ? (b.workday_report_ratio *
+                                            100).toFixed(1) + '%' : '—' }}</td>
+                                        <td
+                                            :style="{color: b.late_night_report_ratio > 0.1 ? 'var(--accent-red)' : ''}">
+                                            {{ b.late_night_report_ratio != null ? (b.late_night_report_ratio *
+                                            100).toFixed(1) + '%' : '—' }}</td>
+                                        <td>{{ b.daa_dna_ratio }}</td>
+                                        <td>{{ b.avg_active_days }}</td>
+                                        <td
+                                            :style="{color: b.proxy_reports > 0 ? 'var(--accent-red)' : '', fontWeight: b.proxy_reports > 0 ? '700' : ''}">
+                                            {{
+                                            formatNum(b.proxy_reports) }}</td>
+                                        <td :style="{color: b.root_reports > 0 ? 'var(--accent-red)' : ''}">{{
+                                            formatNum(b.root_reports) }}</td>
+                                        <td>{{ formatNum(b.adb_reports) }}</td>
+                                        <td
+                                            :style="{color: b.unstable_ip_count > 0 ? 'var(--accent-yellow, #d29922)' : ''}">
+                                            {{ formatNum(b.unstable_ip_count) }}</td>
+                                        <td>{{ formatNum(b.manufacturer_count) }}</td>
+                                        <td style="font-size:0.68rem">{{ b.top_operator || '—' }}</td>
                                     </tr>
                                 </tbody>
+                            </table>
+
+                            <!-- Pagination -->
+                            <div
+                                style="margin-top:1rem; display:flex; justify-content:center; align-items:center; gap:16px;">
+                                <button class="btn" :disabled="eSummaryPage <= 1"
+                                    @click="eSummaryPage--; loadESummary()">上一页</button>
+                                <span style="font-size:0.85rem; color:var(--text-secondary)">
+                                    第 {{ eSummaryPage }} 页 / 共 {{ Math.ceil(eSummaryTotal / 50) || 1 }} 页 (总计 {{
+                                    eSummaryTotal }})
+                                </span>
+                                <button class="btn" :disabled="eSummaryPage * 50 >= eSummaryTotal"
+                                    @click="eSummaryPage++; loadESummary()">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+                    </template>
+
+                    <!-- ====== F 库摘要 ====== -->
+                    <template v-else-if="labLib==='f'">
+                        <div v-if="fSummaryStatus.state && fSummaryStatus.state !== 'ready'"
+                            style="margin-bottom:1rem; padding:12px 16px; background:rgba(210,153,34,0.12); border-left:4px solid var(--accent-yellow); border-radius:var(--radius-md); color:var(--text-primary);">
+                            <div style="font-weight:700; margin-bottom:4px;">F 库摘要当前不可直接使用</div>
+                            <div style="font-size:0.82rem; color:var(--text-secondary); line-height:1.5;">
+                                {{ fSummaryStatus.message }}
+                                <span v-if="fSummaryStatus.fallback_run_id">
+                                    可切换到 run <strong style="color:var(--accent-blue)">{{ fSummaryStatus.fallback_run_id }}</strong> 查看完整 F 摘要。
+                                </span>
+                            </div>
+                        </div>
+                        <div v-if="fKpi.total_ips" class="kpi-row" style="margin-bottom:1.5rem">
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-cyan)">
+                                <div class="kpi-label">F IP 总数</div>
+                                <div class="kpi-value">{{ formatNum(fKpi.total_ips) }}</div>
+                            </div>
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-blue)">
+                                <div class="kpi-label">总上报</div>
+                                <div class="kpi-value">{{ formatNum(fKpi.total_reports) }}</div>
+                                <div class="kpi-sub">均值 {{ fKpi.avg_reports_per_ip }} / IP</div>
+                            </div>
+                            <div class="kpi-card" style="border-left:3px solid var(--accent-green)">
+                                <div class="kpi-label">总设备</div>
+                                <div class="kpi-value">{{ formatNum(fKpi.total_devices) }}</div>
+                                <div class="kpi-sub">均值 {{ fKpi.avg_devices_per_ip }} / IP</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">稳定网络</div>
+                                <div class="kpi-value">{{ formatNum(fKpi.stable_ips) }}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">不稳定网络</div>
+                                <div class="kpi-value">{{ formatNum(fKpi.unstable_ips) }}</div>
+                            </div>
+                            <div class="kpi-card">
+                                <div class="kpi-label">消失网络</div>
+                                <div class="kpi-value">{{ formatNum(fKpi.vanished_ips) }}</div>
+                            </div>
+                        </div>
+
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>📝 F 库 IP 属性明细表 ({{ fSummaryTotal }} IP)</h3>
+                                <div style="display:flex; gap:8px; align-items:center">
+                                    <span style="font-size:0.72rem; color:var(--text-secondary)">点击表头排序</span>
+                                    <button class="btn" style="padding:2px 8px; font-size:0.75rem;"
+                                        @click="fSummaryDesc=!fSummaryDesc; fSummaryPage=1; loadFSummary()">
+                                        {{ fSummaryDesc ? '⬇ 降序' : '⬆ 升序' }}
+                                    </button>
+                                </div>
+                            </div>
+                            <div
+                                style="padding:8px 16px; background:var(--bg-tertiary); border-bottom:1px solid var(--border-color); display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:0.82rem">
+                                <span style="color:var(--text-secondary)">🔎 筛选:</span>
+                                <select v-model="fFilterCol" class="lib-selector" style="width:150px; font-size:0.78rem">
+                                    <option value="">选择列...</option>
+                                    <option value="ip_address">IP</option>
+                                    <option value="ip_stability">稳定性</option>
+                                    <option value="top_operator">运营商</option>
+                                    <option value="total_reports">总上报</option>
+                                    <option value="total_devices">总设备</option>
+                                    <option value="active_days">活跃天</option>
+                                    <option value="wifi_device_ratio">WiFi比</option>
+                                    <option value="mobile_device_ratio">移动比</option>
+                                    <option value="late_night_report_ratio">深夜比</option>
+                                    <option value="proxy_reports">代理</option>
+                                    <option value="root_reports">Root</option>
+                                </select>
+                                <input v-model="fFilterMin" type="text" placeholder="筛选值 / 最小值"
+                                    style="width:120px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.78rem">
+                                <span style="color:var(--text-muted)">~</span>
+                                <input v-model="fFilterMax" type="text" placeholder="最大值"
+                                    style="width:90px; padding:4px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font-size:0.78rem">
+                                <button class="btn" style="padding:4px 12px; font-size:0.78rem"
+                                    @click="fSummaryPage=1; loadFSummary()">应用</button>
+                                <button class="btn" style="padding:4px 12px; font-size:0.78rem; opacity:0.7"
+                                    @click="fFilterCol=''; fFilterMin=''; fFilterMax=''; fSummaryPage=1; loadFSummary()">清除</button>
+                            </div>
+                            <div class="panel-body"
+                                style="overflow-x:auto; max-height:520px; overflow-y:auto; position:relative">
+                                <table class="compare-table h-detail-table" style="font-size:0.73rem; white-space:nowrap">
+                                    <thead>
+                                        <tr>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='ip_address'}"
+                                                @click="fClickSort('ip_address')" style="text-align:left">IP</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='ip_stability'}"
+                                                @click="fClickSort('ip_stability')">稳定性</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='total_reports'}"
+                                                @click="fClickSort('total_reports')">总上报</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='total_devices'}"
+                                                @click="fClickSort('total_devices')">总设备</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='active_days'}"
+                                                @click="fClickSort('active_days')">活跃天</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='wifi_device_ratio'}"
+                                                @click="fClickSort('wifi_device_ratio')">WiFi比</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='mobile_device_ratio'}"
+                                                @click="fClickSort('mobile_device_ratio')">移动比</th>
+                                            <th class="sortable-th"
+                                                :class="{sorted: fSummarySort==='late_night_report_ratio'}"
+                                                @click="fClickSort('late_night_report_ratio')">深夜比</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='proxy_reports'}"
+                                                @click="fClickSort('proxy_reports')" style="color:var(--accent-red)">代理</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='root_reports'}"
+                                                @click="fClickSort('root_reports')" style="color:var(--accent-red)">Root</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='adb_reports'}"
+                                                @click="fClickSort('adb_reports')">ADB</th>
+                                            <th class="sortable-th" :class="{sorted: fSummarySort==='top_operator'}"
+                                                @click="fClickSort('top_operator')">运营商</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="ip in fSummary" :key="ip.ip_long">
+                                            <td class="font-mono ip-copyable"
+                                                style="font-size:0.68rem; color:var(--accent-blue); text-align:left; cursor:pointer"
+                                                @click="copyIp(ip.ip_address)" :title="'点击复制 ' + ip.ip_address">
+                                                {{ ip.ip_address || '—' }}
+                                            </td>
+                                            <td>{{ ip.ip_stability || '—' }}</td>
+                                            <td style="font-weight:700">{{ formatNum(ip.total_reports) }}</td>
+                                            <td>{{ formatNum(ip.total_devices) }}</td>
+                                            <td>{{ formatNum(ip.active_days) }}</td>
+                                            <td>{{ ip.wifi_device_ratio != null ? (Number(ip.wifi_device_ratio) * 100).toFixed(1) + '%' : '—' }}</td>
+                                            <td>{{ ip.mobile_device_ratio != null ? (Number(ip.mobile_device_ratio) * 100).toFixed(1) + '%' : '—' }}</td>
+                                            <td>{{ ip.late_night_report_ratio != null ? (Number(ip.late_night_report_ratio) * 100).toFixed(1) + '%' : '—' }}</td>
+                                            <td :style="{color: ip.proxy_reports > 0 ? 'var(--accent-red)' : ''}">{{ formatNum(ip.proxy_reports) }}</td>
+                                            <td :style="{color: ip.root_reports > 0 ? 'var(--accent-red)' : ''}">{{ formatNum(ip.root_reports) }}</td>
+                                            <td>{{ formatNum(ip.adb_reports) }}</td>
+                                            <td style="font-size:0.68rem">{{ ip.top_operator || '—' }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <div
+                                    style="margin-top:1rem; display:flex; justify-content:center; align-items:center; gap:16px;">
+                                    <button class="btn" :disabled="fSummaryPage <= 1"
+                                        @click="fSummaryPage--; loadFSummary()">上一页</button>
+                                    <span style="font-size:0.85rem; color:var(--text-secondary)">
+                                        第 {{ fSummaryPage }} 页 / 共 {{ Math.ceil(fSummaryTotal / 50) || 1 }} 页 (总计 {{
+                                        fSummaryTotal }})
+                                    </span>
+                                    <button class="btn" :disabled="fSummaryPage * 50 >= fSummaryTotal"
+                                        @click="fSummaryPage++; loadFSummary()">下一页</button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </template>
+
+                <!-- ── Profile Sub ── -->
+                <template v-if="labSub==='profile'">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3>📊 画像标签分布统计</h3>
+                            <button class="btn" @click="loadTagDistribution()" style="margin-left:auto">🔄 刷新</button>
+                        </div>
+                        <div class="panel-body">
+                            <p v-if="!funnelData.funnel || !funnelData.funnel.length"
+                                style="color:var(--text-secondary)">
+                                加载中…请稍候或点击刷新
+                            </p>
+                            <table v-else class="compare-table" style="font-size:0.85rem;width:100%">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align:left">标签</th>
+                                        <th>CIDR 块数</th>
+                                        <th>IP 量</th>
+                                        <th>设备量</th>
+                                        <th>上报量</th>
+                                        <th>异常 IP</th>
+                                        <th>均块 IP</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(step, idx) in funnelData.funnel" :key="step.tag.id"
+                                        :style="{borderLeft: '4px solid ' + step.tag.color}">
+                                        <td style="text-align:left">
+                                            <span>{{ step.tag.emoji }}</span>
+                                            <strong>{{ step.tag.name }}</strong>
+                                        </td>
+                                        <td>{{ formatNum(step.matched.blocks) }}</td>
+                                        <td>{{ formatNum(step.matched.ips) }}</td>
+                                        <td>{{ formatNum(step.matched.devices) }}</td>
+                                        <td>{{ formatNum(step.matched.reports) }}</td>
+                                        <td :style="{color: step.matched.abnormal_ips > 0 ? 'var(--accent-red)' : ''}">
+                                            {{ formatNum(step.matched.abnormal_ips || 0) }}
+                                        </td>
+                                        <td>{{ step.matched.blocks > 0 ? Math.round(step.matched.ips /
+                                            step.matched.blocks) : '—' }}</td>
+                                    </tr>
+                                </tbody>
+                                <tfoot>
+                                    <tr style="font-weight:bold;background:var(--surface-1)">
+                                        <td style="text-align:left">📦 全量</td>
+                                        <td>{{ formatNum(funnelData.total?.blocks) }}</td>
+                                        <td>{{ formatNum(funnelData.total?.ips) }}</td>
+                                        <td>{{ formatNum(funnelData.total?.devices) }}</td>
+                                        <td>{{ formatNum(funnelData.total?.reports) }}</td>
+                                        <td>—</td>
+                                        <td>{{ funnelData.total?.blocks > 0 ? Math.round(funnelData.total.ips /
+                                            funnelData.total.blocks) : '—' }}</td>
+                                    </tr>
+                                    <tr style="font-weight:bold;background:var(--surface-2)">
+                                        <td style="text-align:left">✅ 已标记合计</td>
+                                        <td>{{ formatNum(tagSum('blocks')) }}</td>
+                                        <td>{{ formatNum(tagSum('ips')) }}</td>
+                                        <td>{{ formatNum(tagSum('devices')) }}</td>
+                                        <td>{{ formatNum(tagSum('reports')) }}</td>
+                                        <td>{{ formatNum(tagSum('abnormal_ips')) }}</td>
+                                        <td>—</td>
+                                    </tr>
+                                    <tr style="color:var(--text-secondary)">
+                                        <td style="text-align:left">❓ 剩余未标记</td>
+                                        <td>{{ formatNum(tagRemain('blocks')) }}</td>
+                                        <td>{{ formatNum(tagRemain('ips')) }}</td>
+                                        <td>{{ formatNum(tagRemain('devices')) }}</td>
+                                        <td>{{ formatNum(tagRemain('reports')) }}</td>
+                                        <td>—</td>
+                                        <td>—</td>
+                                    </tr>
+                                </tfoot>
                             </table>
                         </div>
                     </div>
                 </template>
 
                 <!-- ── Flow Sub ── -->
-                <template v-if="labSub==='flow'">
+                <template v-if="false && labSub==='flow'">
                     <div class="grid-2">
                         <div class="panel">
                             <div class="panel-header">
@@ -854,7 +2172,7 @@
                 </template>
 
                 <!-- ── H Deep Analysis ── -->
-                <template v-if="labSub==='deep'">
+                <template v-if="false && labSub==='deep'">
                     <div class="grid-3" v-if="labDeep.overall">
                         <div class="kpi-card">
                             <div class="kpi-icon">✂️</div>
@@ -1063,7 +2381,7 @@
                 </template>
 
                 <!-- ── Samples ── -->
-                <template v-if="labSub==='samples'">
+                <template v-if="false && labSub==='samples'">
                     <div style="display:flex;gap:8px;margin-bottom:1rem">
                         <button class="btn" :class="{active:sampleZone==='boundary'}"
                             @click="sampleZone='boundary';loadSamples()">🎯 边界带</button>
@@ -1140,7 +2458,7 @@
     </div>
 
     <script>
-        const { createApp, ref, computed, onMounted, nextTick } = Vue;
+        const { createApp, ref, computed, reactive, onMounted, nextTick } = Vue;
 
         const API = '';  // Same origin
 
@@ -1160,6 +2478,142 @@
                 const traceResult = ref(null);
                 const tooltip = ref({ visible: false, x: 0, y: 0, data: null });
 
+                // ── 画像标签漏斗 ──
+                const funnelData = ref({ total: {}, funnel: [], tag_count: 0 });
+                const remainingStats = ref([]);
+                const funnelRemaining = computed(() => {
+                    const f = funnelData.value.funnel;
+                    if (f && f.length > 0) {
+                        const last = f[f.length - 1];
+                        return { blocks: last.remaining.blocks, ips: last.remaining.ips, devices: last.remaining.devices };
+                    }
+                    const t = funnelData.value.total || {};
+                    return { blocks: t.blocks || 0, ips: t.ips || 0, devices: t.devices || 0 };
+                });
+                const funnelCoveredIps = computed(() => {
+                    const f = funnelData.value.funnel;
+                    if (!f || !f.length) return 0;
+                    return f.reduce((s, step) => s + (step.matched.ips || 0), 0);
+                });
+                const funnelCoveredReports = computed(() => {
+                    const f = funnelData.value.funnel;
+                    if (!f || !f.length) return 0;
+                    return f.reduce((s, step) => s + (step.matched.reports || 0), 0);
+                });
+                const funnelCoveredIpPct = computed(() => {
+                    const total = funnelData.value.total?.ips || 0;
+                    if (!total) return '0.0';
+                    return (funnelCoveredIps.value / total * 100).toFixed(1);
+                });
+                const funnelCoveredReportPct = computed(() => {
+                    const total = funnelData.value.total?.reports || 0;
+                    if (!total) return '0.0';
+                    return (funnelCoveredReports.value / total * 100).toFixed(1);
+                });
+
+                async function loadFunnel() {
+                    try {
+                        const rid = selectedRunId.value;
+                        const lib = labLib.value || 'h';
+                        const res = await fetch(`${API}/api/research/profiling/funnel?run_id=${rid}&lib=${lib}`);
+                        funnelData.value = await res.json();
+                        remainingStats.value = [];
+                    } catch (e) { console.error('Funnel Error:', e); }
+                }
+                async function loadTagDistribution() { await loadFunnel(); }
+
+                // Helper for tag distribution table (Vue templates don't support arrow functions)
+                function tagSum(metric) {
+                    var f = funnelData.value.funnel;
+                    if (!f) return 0;
+                    var s = 0;
+                    for (var i = 0; i < f.length; i++) { s += (f[i].matched[metric] || 0); }
+                    return s;
+                }
+                function tagRemain(metric) {
+                    var total = (funnelData.value.total && funnelData.value.total[metric]) || 0;
+                    return total - tagSum(metric);
+                }
+
+                async function loadRemainingStats() {
+                    try {
+                        const rid = selectedRunId.value;
+                        const lib = labLib.value || 'h';
+                        const res = await fetch(`${API}/api/research/profiling/remaining-stats?run_id=${rid}&lib=${lib}`);
+                        const data = await res.json();
+                        remainingStats.value = data.stats || [];
+                    } catch (e) { console.error('Remaining Stats Error:', e); }
+                }
+
+                function funnelBarLeft(idx) {
+                    const total = funnelData.value.total?.blocks || 1;
+                    let left = 0;
+                    for (let i = 0; i < idx; i++) {
+                        left += (funnelData.value.funnel[i].matched.blocks / total) * 100;
+                    }
+                    return left;
+                }
+                function funnelBarWidth(idx) {
+                    const total = funnelData.value.total?.blocks || 1;
+                    return (funnelData.value.funnel[idx].matched.blocks / total) * 100;
+                }
+                // Generalized bar helpers for blocks/ips/reports
+                function funnelBarLeftBy(idx, metric) {
+                    const total = funnelData.value.total?.[metric] || 1;
+                    let left = 0;
+                    for (let i = 0; i < idx; i++) {
+                        left += (funnelData.value.funnel[i].matched[metric] / total) * 100;
+                    }
+                    return left;
+                }
+                function funnelBarWidthBy(idx, metric) {
+                    const total = funnelData.value.total?.[metric] || 1;
+                    return (funnelData.value.funnel[idx].matched[metric] / total) * 100;
+                }
+                function funnelBarCovered(metric) {
+                    const f = funnelData.value.funnel;
+                    if (!f || !f.length) return 0;
+                    return f.reduce((s, step) => s + (step.matched[metric] || 0), 0);
+                }
+                function funnelBarPct(metric) {
+                    const total = funnelData.value.total?.[metric] || 0;
+                    if (!total) return '0.0';
+                    return (funnelBarCovered(metric) / total * 100).toFixed(1);
+                }
+
+                const METRIC_LABELS = {
+                    mobile_device_ratio: '移动占比', wifi_device_ratio: 'WiFi占比',
+                    ip_count: 'IP数/块', avg_devices_per_ip: '均设备/IP',
+                    avg_reports_per_ip: '均上报/IP', avg_apps_per_ip: '均应用/IP',
+                    daa_dna_ratio: 'DAA/DNA', avg_active_days: '活跃天',
+                    late_night_report_ratio: '深夜比', abnormal_ip_ratio: '异常比',
+                    proxy_reports: '代理上报', root_reports: 'Root上报',
+                    density: '密度',
+                    android_device_ratio: '安卓ID/DID', oaid_device_ratio: 'OAID/DID',
+                    android_oaid_ratio: '安卓ID/OAID',
+                    report_oaid_ratio: '上报/OAID',
+                    avg_model_per_ip: '均型号/IP', avg_manufacturer_per_ip: '均制造商/IP',
+                };
+                function metricLabel(m) { return METRIC_LABELS[m] || m; }
+
+                // ── IP 邻域搜索 ──
+                const nbIp = ref('');
+                const nbRadius = ref(8);
+                const nbLoading = ref(false);
+                const nbResult = ref(null);
+
+                async function doNbSearch() {
+                    if (!nbIp.value.trim()) return;
+                    nbLoading.value = true;
+                    nbResult.value = null;
+                    try {
+                        const rid = selectedRunId.value;
+                        const res = await fetch(`${API}/api/research/ip-neighborhood?ip=${encodeURIComponent(nbIp.value.trim())}&radius=${nbRadius.value}&run_id=${rid}`);
+                        nbResult.value = await res.json();
+                    } catch (e) { console.error('NB Search Error:', e); }
+                    finally { nbLoading.value = false; }
+                }
+
                 // ── Computed ──
                 const allQAPassed = computed(() =>
                     qaResults.value.length > 0 && qaResults.value.every(q => q.pass_flag)
@@ -1171,13 +2625,28 @@
                     return o.keep_members_cnt - (o.h_members_cnt + o.e_members_cnt + o.f_members_cnt);
                 });
 
+                const selectedRunMeta = computed(() =>
+                    runs.value.find(r => r.run_id === selectedRunId.value) || null
+                );
+
+                function pickDefaultRun(runList) {
+                    if (!runList.length) return '';
+                    const preferred = runList.find(r => r.preferred_for_ui);
+                    if (preferred) return preferred.run_id;
+                    const summaryReady = runList.find(r => r.summary_bundle_ready);
+                    if (summaryReady) return summaryReady.run_id;
+                    const heReady = runList.find(r => r.h_summary_ready && r.e_summary_ready);
+                    if (heReady) return heReady.run_id;
+                    return runList[0].run_id;
+                }
+
                 // ── Load ──
                 async function loadRuns() {
                     try {
                         const res = await fetch(`${API}/api/dashboard/runs`);
                         runs.value = await res.json();
                         if (runs.value.length > 0) {
-                            selectedRunId.value = runs.value[0].run_id;
+                            selectedRunId.value = pickDefaultRun(runs.value);
                             await loadRunData();
                         }
                     } catch (e) {
@@ -1187,15 +2656,16 @@
                     }
                 }
 
-                async function loadRunData() {
+                async function loadRunData(force = false) {
                     if (!selectedRunId.value) return;
                     loading.value = true;
                     try {
+                        const rid = selectedRunId.value;
                         const [ovRes, shRes, qaRes, tdRes] = await Promise.all([
-                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/overview`),
-                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/shards`),
-                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/qa`),
-                            fetch(`${API}/api/dashboard/runs/${selectedRunId.value}/network-tier-distribution`),
+                            fetch(`${API}/api/dashboard/runs/${rid}/overview?force_refresh=${force}`),
+                            fetch(`${API}/api/dashboard/runs/${rid}/shards`),
+                            fetch(`${API}/api/dashboard/runs/${rid}/qa`),
+                            fetch(`${API}/api/dashboard/runs/${rid}/network-tier-distribution`),
                         ]);
                         overview.value = await ovRes.json();
                         shards.value = await shRes.json();
@@ -1205,6 +2675,37 @@
                         console.error('Failed to load run data:', e);
                     } finally {
                         loading.value = false;
+                    }
+                }
+
+                async function reloadCurrentLabView() {
+                    if (labSub.value === 'summary') {
+                        if (labLib.value === 'h') {
+                            await loadHSummary();
+                        } else if (labLib.value === 'e') {
+                            await loadESummary();
+                        } else {
+                            await loadFSummary();
+                        }
+                        return;
+                    }
+                    if (labSub.value === 'profiling' || labSub.value === 'profile') {
+                        await loadFunnel();
+                        return;
+                    }
+                    if (labSub.value === 'issues') {
+                        await loadIssues();
+                        return;
+                    }
+                    await loadLabData();
+                }
+
+                async function handleRunChange() {
+                    await loadRunData();
+                    nbResult.value = null;
+                    traceResult.value = null;
+                    if (currentTab.value === 'lab') {
+                        await reloadCurrentLabView();
                     }
                 }
 
@@ -1291,6 +2792,7 @@
                         'no_ghost_hef_outside_source': '无幽灵成员检查',
                         'drop_members_have_natural_map': 'Drop成员映射检查',
                         'h_excludes_invalid_tier': 'H排除无效块检查',
+                        'h_excludes_valid_lt4': 'H排除低有效IP块检查',
                         'f_excludes_e_atoms': 'F排除E原子检查',
                         'split_events_include_cnt0': '切分事件cnt=0审计',
                         'shard_plan_matches_shard_cnt': 'ShardPlan连续性检查',
@@ -1308,6 +2810,7 @@
                         'no_ghost_hef_outside_source': 'H/E/F中的所有IP必须来自源成员表，不允许凭空出现',
                         'drop_members_have_natural_map': '被Drop的成员必须能找到对应的自然块映射',
                         'h_excludes_invalid_tier': 'H库中不能包含非"中型网络"级别的块',
+                        'h_excludes_valid_lt4': 'H库中不能包含有效IP数小于4的块',
                         'f_excludes_e_atoms': 'F库成员不能出现在E库的/27原子中',
                         'split_events_include_cnt0': '切分事件表中cnt=0的记录数审计（用于跟踪边界情况）',
                         'shard_plan_matches_shard_cnt': '分片计划的Shard数量必须连续且完整(0~64)',
@@ -1342,6 +2845,253 @@
                 const labLoading = ref(false);
                 const _charts = {};
 
+                // H-Summary State
+                const hSummary = ref([]);
+                const hSummaryPage = ref(1);
+                const hSummaryTotal = ref(0);
+                const hSummarySort = ref('ip_count');
+                const hSummaryDesc = ref(true);
+                const hKpi = ref({});
+                const hSummaryStatus = ref({});
+                const hFilterCol = ref('');
+                const hFilterMin = ref('');
+                const hFilterMax = ref('');
+                const hExcludeTagged = ref(false);
+
+                // 字段工作台
+                const fieldWorkbench = reactive({
+                    fields: [
+                        // A. 结构与评分 (H库特有)
+                        { name: 'block_id_final', category: '结构', desc: '最终块ID', keep: true, comment: '' },
+                        { name: 'shard_id', category: '结构', desc: '分片编号', keep: true, comment: '' },
+                        { name: 'simple_score', category: '评分', desc: 'wA+wD综合评分', keep: true, comment: '' },
+                        { name: 'wa', category: '评分', desc: 'IP数量权重(5档)', keep: true, comment: '' },
+                        { name: 'wd', category: '评分', desc: '密度权重(5档)', keep: true, comment: '' },
+                        { name: 'density', category: '评分', desc: 'IP密度(设备/IP)', keep: true, comment: '' },
+                        { name: 'network_tier_final', category: '评分', desc: '网络规模等级', keep: true, comment: '' },
+                        { name: 'member_cnt_total', category: '结构', desc: '自然块成员总数', keep: true, comment: '' },
+                        { name: 'valid_cnt', category: '结构', desc: '有效IP数', keep: true, comment: '' },
+                        // B. 规模
+                        { name: 'ip_count', category: '规模', desc: '原始表JOIN后去重IP数', keep: true, comment: '' },
+                        { name: 'total_reports', category: '规模', desc: '过滤后上报总数', keep: true, comment: '' },
+                        { name: 'total_reports_pre_filter', category: '规模', desc: '过滤前上报总数', keep: false, comment: '' },
+                        { name: 'total_devices', category: '规模', desc: '过滤后设备总数', keep: true, comment: '' },
+                        { name: 'total_devices_pre_filter', category: '规模', desc: '过滤前设备总数', keep: false, comment: '' },
+                        // C. 上报分类
+                        { name: 'daa_reports', category: '上报', desc: 'DAA业务上报', keep: true, comment: '' },
+                        { name: 'dna_reports', category: '上报', desc: 'DNA业务上报', keep: true, comment: '' },
+                        { name: 'worktime_reports', category: '上报', desc: '工作时间上报', keep: true, comment: '' },
+                        { name: 'workday_reports', category: '上报', desc: '工作日上报', keep: true, comment: '' },
+                        { name: 'weekend_reports', category: '上报', desc: '周末上报', keep: true, comment: '' },
+                        { name: 'late_night_reports', category: '上报', desc: '深夜上报', keep: true, comment: '' },
+                        // D. 设备分类
+                        { name: 'wifi_devices', category: '设备', desc: 'WiFi设备数', keep: true, comment: '' },
+                        { name: 'mobile_devices', category: '设备', desc: '移动网络设备数', keep: true, comment: '' },
+                        { name: 'vpn_devices', category: '设备', desc: 'VPN设备数', keep: true, comment: '' },
+                        { name: 'wired_devices', category: '设备', desc: '有线网络设备数', keep: false, comment: '' },
+                        { name: 'abnormal_net_devices', category: '设备', desc: '异常网络设备数', keep: true, comment: '' },
+                        { name: 'empty_net_devices', category: '设备', desc: '空网络状态设备数', keep: false, comment: '' },
+                        { name: 'total_apps', category: '设备', desc: '应用数量', keep: true, comment: '' },
+                        // E. ID
+                        { name: 'android_id_count', category: 'ID', desc: '安卓ID数量', keep: true, comment: '' },
+                        { name: 'oaid_count', category: 'ID', desc: 'OAID数量', keep: true, comment: '' },
+                        { name: 'google_id_count', category: 'ID', desc: '谷歌广告ID数量', keep: false, comment: '' },
+                        { name: 'boot_id_count', category: 'ID', desc: '启动ID数量', keep: false, comment: '' },
+                        { name: 'model_count', category: 'ID', desc: '型号数量', keep: true, comment: '' },
+                        { name: 'manufacturer_count', category: 'ID', desc: '制造商数量', keep: true, comment: '' },
+                        // F. WiFi/网络
+                        { name: 'ssid_count', category: '网络', desc: 'SSID去重数', keep: true, comment: '' },
+                        { name: 'bssid_count', category: '网络', desc: 'BSSID去重数', keep: true, comment: '' },
+                        { name: 'gateway_reports', category: '网络', desc: '网关存在上报次数', keep: false, comment: '' },
+                        { name: 'ethernet_reports', category: '网络', desc: '以太网上报次数', keep: false, comment: '' },
+                        { name: 'wifi_comparable_reports', category: '网络', desc: 'WiFi可比上报次数', keep: false, comment: '' },
+                        // G. 风险
+                        { name: 'proxy_reports', category: '风险', desc: '代理上报', keep: true, comment: '' },
+                        { name: 'root_reports', category: '风险', desc: 'Root设备上报', keep: true, comment: '' },
+                        { name: 'adb_reports', category: '风险', desc: 'ADB调试上报', keep: true, comment: '' },
+                        { name: 'charging_reports', category: '风险', desc: '充电状态上报', keep: false, comment: '' },
+                        { name: 'max_single_device_reports', category: '风险', desc: '单设备最大上报', keep: true, comment: '' },
+                        // H. 衍生
+                        { name: 'avg_reports_per_ip', category: '衍生', desc: '每IP平均上报', keep: true, comment: '' },
+                        { name: 'avg_devices_per_ip', category: '衍生', desc: '每IP平均设备', keep: true, comment: '' },
+                        { name: 'avg_active_days', category: '衍生', desc: '平均活跃天数', keep: true, comment: '' },
+                        { name: 'wifi_device_ratio', category: '衍生', desc: 'WiFi设备占比', keep: true, comment: '' },
+                        { name: 'mobile_device_ratio', category: '衍生', desc: '移动设备占比', keep: true, comment: '' },
+                        { name: 'vpn_device_ratio', category: '衍生', desc: 'VPN设备占比', keep: true, comment: '' },
+                        { name: 'workday_report_ratio', category: '衍生', desc: '工作日上报占比', keep: true, comment: '' },
+                        { name: 'late_night_report_ratio', category: '衍生', desc: '深夜上报占比', keep: true, comment: '' },
+                        { name: 'daa_dna_ratio', category: '衍生', desc: 'DAA/DNA比值', keep: true, comment: '' },
+                        { name: 'top_operator', category: '衍生', desc: '主要运营商', keep: true, comment: '' },
+                        { name: 'distinct_operators', category: '衍生', desc: '运营商种类数', keep: true, comment: '' },
+                        { name: 'unstable_ip_count', category: '稳定性', desc: '不稳定IP数', keep: true, comment: '' },
+                        { name: 'unstable_ip_ratio', category: '稳定性', desc: '不稳定IP占比', keep: true, comment: '' },
+                    ],
+                    computed: [],
+                    lastSaved: ''
+                });
+
+                async function submitFieldConfig() {
+                    try {
+                        const lib = labLib.value;
+                        const payload = {
+                            library: lib,
+                            fields: fieldWorkbench.fields.map(f => ({
+                                name: f.name,
+                                keep: f.keep,
+                                category: f.category,
+                                desc: f.desc,
+                                comment: f.comment || ''
+                            })),
+                            computed_columns: fieldWorkbench.computed.filter(c => c.resultName && c.fieldA && c.fieldB).map(c => ({
+                                name: c.resultName,
+                                fieldA: c.fieldA,
+                                op: c.op,
+                                fieldB: c.fieldB,
+                                formula: `${c.fieldA} ${c.op} ${c.fieldB}`,
+                                comment: c.comment || ''
+                            }))
+                        };
+                        const res = await fetch(`${API}/api/research/field-config`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const result = await res.json();
+                        if (result.status === 'ok') {
+                            fieldWorkbench.lastSaved = result.filename +
+                                ` (${result.field_count}字段, ${result.computed_count}计算列)`;
+                        } else {
+                            alert('保存失败: ' + JSON.stringify(result));
+                        }
+                    } catch (e) {
+                        console.error('Field config save error:', e);
+                        alert('保存出错: ' + e.message);
+                    }
+                }
+
+                // E-Summary State
+                const eSummary = ref([]);
+                const eSummaryPage = ref(1);
+                const eSummaryTotal = ref(0);
+                const eSummarySort = ref('ip_count');
+                const eSummaryDesc = ref(true);
+                const eKpi = ref({});
+                const eSummaryStatus = ref({});
+                const eFilterCol = ref('');
+                const eFilterMin = ref('');
+                const eFilterMax = ref('');
+                const eExcludeTagged = ref(false);
+
+                // F-Summary State
+                const fSummary = ref([]);
+                const fSummaryPage = ref(1);
+                const fSummaryTotal = ref(0);
+                const fSummarySort = ref('total_reports');
+                const fSummaryDesc = ref(true);
+                const fKpi = ref({});
+                const fSummaryStatus = ref({});
+                const fFilterCol = ref('');
+                const fFilterMin = ref('');
+                const fFilterMax = ref('');
+
+                async function loadHSummary() {
+                    labLoading.value = true;
+                    try {
+                        const rid = selectedRunId.value;
+                        const [kpiRes, listRes] = await Promise.all([
+                            fetch(`${API}/api/research/runs/${rid}/h/kpi`),
+                            fetch(`${API}/api/research/runs/${rid}/h/summary-blocks?page=${hSummaryPage.value}&sort_by=${hSummarySort.value}&desc=${hSummaryDesc.value}&filter_col=${hFilterCol.value}&filter_min=${hFilterMin.value}&filter_max=${hFilterMax.value}&exclude_tagged=${hExcludeTagged.value}`)
+                        ]);
+                        hKpi.value = await kpiRes.json();
+                        const data = await listRes.json();
+                        hSummary.value = data.blocks || [];
+                        hSummaryTotal.value = data.total || 0;
+                        hSummaryStatus.value = data.summary_status || hKpi.value.summary_status || {};
+                    } catch (e) { console.error('H-Summary Error:', e); }
+                    finally { labLoading.value = false; }
+                }
+
+                function hClickSort(col) {
+                    if (hSummarySort.value === col) {
+                        hSummaryDesc.value = !hSummaryDesc.value;
+                    } else {
+                        hSummarySort.value = col;
+                        hSummaryDesc.value = true;
+                    }
+                    hSummaryPage.value = 1;
+                    loadHSummary();
+                }
+
+                function copyIp(text) {
+                    if (!text) return;
+                    navigator.clipboard.writeText(text).then(() => {
+                        // brief visual feedback via title tooltip
+                        console.log('Copied:', text);
+                    }).catch(() => {
+                        // fallback
+                        const ta = document.createElement('textarea');
+                        ta.value = text; document.body.appendChild(ta);
+                        ta.select(); document.execCommand('copy');
+                        document.body.removeChild(ta);
+                    });
+                }
+
+                async function loadESummary() {
+                    labLoading.value = true;
+                    try {
+                        const rid = selectedRunId.value;
+                        const [kpiRes, listRes] = await Promise.all([
+                            fetch(`${API}/api/research/runs/${rid}/e/kpi`),
+                            fetch(`${API}/api/research/runs/${rid}/e/summary-blocks?page=${eSummaryPage.value}&sort_by=${eSummarySort.value}&desc=${eSummaryDesc.value}&filter_col=${eFilterCol.value}&filter_min=${eFilterMin.value}&filter_max=${eFilterMax.value}&exclude_tagged=${eExcludeTagged.value}`)
+                        ]);
+                        eKpi.value = await kpiRes.json();
+                        const data = await listRes.json();
+                        eSummary.value = data.blocks || [];
+                        eSummaryTotal.value = data.total || 0;
+                        eSummaryStatus.value = data.summary_status || eKpi.value.summary_status || {};
+                    } catch (e) { console.error('E-Summary Error:', e); }
+                    finally { labLoading.value = false; }
+                }
+
+                function eClickSort(col) {
+                    if (eSummarySort.value === col) {
+                        eSummaryDesc.value = !eSummaryDesc.value;
+                    } else {
+                        eSummarySort.value = col;
+                        eSummaryDesc.value = true;
+                    }
+                    eSummaryPage.value = 1;
+                    loadESummary();
+                }
+
+                async function loadFSummary() {
+                    labLoading.value = true;
+                    try {
+                        const rid = selectedRunId.value;
+                        const [kpiRes, listRes] = await Promise.all([
+                            fetch(`${API}/api/research/runs/${rid}/f/kpi`),
+                            fetch(`${API}/api/research/runs/${rid}/f/summary-ips?page=${fSummaryPage.value}&sort_by=${fSummarySort.value}&desc=${fSummaryDesc.value}&filter_col=${fFilterCol.value}&filter_min=${encodeURIComponent(fFilterMin.value)}&filter_max=${encodeURIComponent(fFilterMax.value)}`)
+                        ]);
+                        fKpi.value = await kpiRes.json();
+                        const data = await listRes.json();
+                        fSummary.value = data.ips || [];
+                        fSummaryTotal.value = data.total || 0;
+                        fSummaryStatus.value = data.summary_status || fKpi.value.summary_status || {};
+                    } catch (e) { console.error('F-Summary Error:', e); }
+                    finally { labLoading.value = false; }
+                }
+
+                function fClickSort(col) {
+                    if (fSummarySort.value === col) {
+                        fSummaryDesc.value = !fSummaryDesc.value;
+                    } else {
+                        fSummarySort.value = col;
+                        fSummaryDesc.value = true;
+                    }
+                    fSummaryPage.value = 1;
+                    loadFSummary();
+                }
+
                 function _ec(id) {
                     if (_charts[id]) { _charts[id].dispose(); }
                     const el = document.getElementById(id);
@@ -1352,8 +3102,19 @@
                 const LIB_COLORS = { h: '#f0883e', e: '#bc8cff', f: '#39d2c0' };
 
                 async function initLab() {
-                    if (labOverview.value.run_id) return;
-                    await loadLabData();
+                    if (labLib.value === 'h') {
+                        labSub.value = 'summary';
+                        await loadHSummary();
+                    } else if (labLib.value === 'e') {
+                        labSub.value = 'summary';
+                        await loadESummary();
+                    } else if (labLib.value === 'f') {
+                        labSub.value = 'summary';
+                        await loadFSummary();
+                    } else {
+                        labSub.value = 'overview';
+                        await loadLabData();
+                    }
                 }
 
                 async function loadLabData() {
@@ -1819,16 +3580,28 @@
                 return {
                     currentTab, loading, runs, selectedRunId, overview, shards,
                     qaResults, tierDist, searchQuery, searchLoading, traceResult,
+                    selectedRunMeta, handleRunChange,
+                    nbIp, nbRadius, nbLoading, nbResult, doNbSearch,
+                    funnelData, funnelRemaining, remainingStats, loadFunnel, loadRemainingStats,
+                    funnelCoveredIps, funnelCoveredReports, funnelCoveredIpPct, funnelCoveredReportPct,
+                    funnelBarLeft, funnelBarWidth, funnelBarLeftBy, funnelBarWidthBy, funnelBarCovered, funnelBarPct, metricLabel,
                     tooltip, allQAPassed, conservationDiff,
                     loadRunData, doSearch, formatNum, pct, shardStatusClass,
                     tierColor, tierPct, classIcon, formatQAName, qaDescription,
                     showShardTooltip, hideTooltip, viewShardDetail,
                     labLib, labSub, labOverview, labIssues, labLoading,
-                    initLab, loadLabData, renderProfileCharts, renderFlowCharts, loadIssues,
+                    initLab, loadLabData, renderProfileCharts, renderFlowCharts, loadIssues, loadTagDistribution, tagSum, tagRemain,
                     labDeep, labSamples, sampleZone,
                     loadDeepAnalysis, loadSamples, jumpToExplorer,
                     wdBins, wdLoading, wdResult, runWdWhatIf, resetWdBins,
                     eThresholds, eLoading, eResult, runEWhatIf,
+                    hSummary, hSummarySort, hSummaryPage, hSummaryTotal, hSummaryDesc, hKpi, hSummaryStatus, loadHSummary, hClickSort,
+                    hFilterCol, hFilterMin, hFilterMax, hExcludeTagged, copyIp,
+                    fieldWorkbench, submitFieldConfig,
+                    eSummary, eSummarySort, eSummaryPage, eSummaryTotal, eSummaryDesc, eKpi, eSummaryStatus, loadESummary, eClickSort,
+                    eFilterCol, eFilterMin, eFilterMax, eExcludeTagged,
+                    fSummary, fSummarySort, fSummaryPage, fSummaryTotal, fSummaryDesc, fKpi, fSummaryStatus, loadFSummary, fClickSort,
+                    fFilterCol, fFilterMin, fFilterMax,
                     eSuspicious, fOpportunities,
                     selectedIssueIdx,
                     rulePacks, showCreateRulePack, rulePacksLoading, rulePackSaving, rulePackError, newRulePack,

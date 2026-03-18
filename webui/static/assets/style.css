@@ -941,6 +941,48 @@ a:hover {
     color: var(--accent-cyan);
 }
 
+/* ─── H库 Detail Table: sticky thead ─── */
+.h-detail-table thead th {
+    position: sticky !important;
+    top: 0 !important;
+    background: #161b22 !important;
+    z-index: 10 !important;
+    box-shadow: 0 1px 0 var(--border-color);
+}
+
+.sortable-th {
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s, background 0.15s;
+    padding-right: 16px !important;
+    position: relative;
+}
+
+.sortable-th:hover {
+    color: var(--accent-blue) !important;
+    background: rgba(88, 166, 255, 0.06);
+}
+
+.sortable-th.sorted {
+    color: var(--accent-blue) !important;
+    background: rgba(88, 166, 255, 0.1);
+    font-weight: 700 !important;
+}
+
+.sortable-th.sorted::after {
+    content: '▼';
+    position: absolute;
+    right: 4px;
+    font-size: 0.55rem;
+    opacity: 0.7;
+}
+
+.ip-copyable:hover {
+    text-decoration: underline;
+    text-decoration-style: dashed;
+    opacity: 0.85;
+}
+
 .issue-card {
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);

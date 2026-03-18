@@ -13,6 +13,7 @@ from api.explorer import router as explorer_router
 from api.research import router as research_router
 from api.rules import router as rules_router
 from api.rules import init_rules_table
+from api.profiling import router as profiling_router
 
 
 @asynccontextmanager
@@ -37,6 +38,7 @@ app.include_router(dashboard_router)
 app.include_router(explorer_router)
 app.include_router(research_router)
 app.include_router(rules_router)
+app.include_router(profiling_router)
 
 # --- Static Files (SPA) ---
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -60,4 +62,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=DEBUG)
+    uvicorn.run("main:app", host="0.0.0.0", port=8721, reload=DEBUG)

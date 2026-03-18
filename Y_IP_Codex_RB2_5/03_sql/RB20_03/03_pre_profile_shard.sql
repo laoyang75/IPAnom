@@ -91,8 +91,14 @@ agg AS (
 score AS (
   SELECT
     a.*,
-    (a.devices_sum_valid::numeric / NULLIF(a.valid_cnt,0)) AS density,
-    (a.reports_sum_valid::numeric / NULLIF(a.valid_cnt,0)) AS report_density_valid,
+    CASE
+      WHEN a.valid_cnt = 0 THEN NULL
+      ELSE (a.devices_sum_valid::numeric / NULLIF(a.valid_cnt,0))
+    END AS density,
+    CASE
+      WHEN a.valid_cnt = 0 THEN NULL
+      ELSE (a.reports_sum_valid::numeric / NULLIF(a.valid_cnt,0))
+    END AS report_density_valid,
     CASE
       WHEN a.valid_cnt = 0 THEN NULL
       WHEN a.valid_cnt BETWEEN 1 AND 16 THEN 1
@@ -126,6 +132,7 @@ tier AS (
       WHEN (s.wA + s.wD) >= 10 THEN '小型网络'
       ELSE '微型网络'
     END AS network_tier_pre,
+    -- 当前主流程中，全异常块仅保留审计痕迹，不进入业务主分类链路
     CASE
       WHEN s.valid_cnt = 0 THEN false
       ELSE true
@@ -171,7 +178,7 @@ SELECT
   report_density_valid
 FROM tier;
 
--- PreH（DP-004 选 C）：Keep 且 valid_cnt>0 且“跨 bucket64 边界”的自然块（仅减少无效评估，不改变切分定义）
+-- PreH（DP-004 选 C）：Keep + valid_cnt>0 且跨 bucket64 边界的自然块
 INSERT INTO rb20_v2_5.preh_blocks(run_id, contract_version, shard_id, block_id_natural)
 SELECT
   '{{run_id}}','{{contract_version}}', {{shard_id}}::smallint, p.block_id_natural

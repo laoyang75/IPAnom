@@ -9,6 +9,20 @@
 DELETE FROM rb20_v2_5.r1_members
 WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint;
 
+SET enable_nestloop = off;
+SET work_mem = '256MB';
+SET statement_timeout = '15min';
+
+WITH h_cov AS MATERIALIZED (
+  SELECT ip_long
+  FROM rb20_v2_5.h_members
+  WHERE run_id='{{run_id}}'
+),
+final_map AS MATERIALIZED (
+  SELECT ip_long, block_id_final
+  FROM rb20_v2_5.map_member_block_final
+  WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint
+)
 INSERT INTO rb20_v2_5.r1_members(
   run_id, contract_version, shard_id,
   ip_long, atom27_id,
@@ -17,20 +31,16 @@ INSERT INTO rb20_v2_5.r1_members(
 SELECT
   '{{run_id}}','{{contract_version}}', {{shard_id}}::smallint,
   km.ip_long,
-  sm.atom27_id,
+  (km.ip_long / 32)::bigint AS atom27_id,
   km.block_id_natural,
-  mf.block_id_final
+  fm.block_id_final
 FROM rb20_v2_5.keep_members km
-JOIN rb20_v2_5.source_members sm
-  ON sm.run_id=km.run_id AND sm.shard_id=km.shard_id AND sm.ip_long=km.ip_long
-LEFT JOIN rb20_v2_5.map_member_block_final mf
-  ON mf.run_id=km.run_id AND mf.shard_id=km.shard_id AND mf.ip_long=km.ip_long
+LEFT JOIN final_map fm
+  ON fm.ip_long=km.ip_long
+LEFT JOIN h_cov h
+  ON h.ip_long=km.ip_long
 WHERE km.run_id='{{run_id}}' AND km.shard_id={{shard_id}}::smallint
-  AND NOT EXISTS (
-    SELECT 1
-    FROM rb20_v2_5.h_members hm
-    WHERE hm.run_id=km.run_id AND hm.ip_long=km.ip_long
-  );
+  AND h.ip_long IS NULL;
 
 -- StepStats（per-shard）
 DELETE FROM rb20_v2_5.step_stats

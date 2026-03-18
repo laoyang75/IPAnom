@@ -9,6 +9,13 @@
 DELETE FROM rb20_v2_5.profile_final
 WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint;
 
+-- Final profile 需要把 final 成员回连 source_members 并做多轮聚合。
+-- 在当前样本与大 shard 上，planner 容易把 ip_long / block_id_final 条件退化成 join filter，
+-- 继而走 nested loop，导致分钟级扫描。这里统一禁用 nestloop，保持 hash / merge join 路线。
+SET LOCAL enable_nestloop = off;
+SET LOCAL work_mem = '256MB';
+SET LOCAL statement_timeout = '15min';
+
 WITH m AS (
   SELECT
     map.block_id_final,
@@ -80,8 +87,14 @@ agg AS (
 score AS (
   SELECT
     a.*,
-    (a.devices_sum_valid::numeric / NULLIF(a.valid_cnt,0)) AS density,
-    (a.reports_sum_valid::numeric / NULLIF(a.valid_cnt,0)) AS report_density_valid,
+    CASE
+      WHEN a.valid_cnt = 0 THEN NULL
+      ELSE (a.devices_sum_valid::numeric / NULLIF(a.valid_cnt,0))
+    END AS density,
+    CASE
+      WHEN a.valid_cnt = 0 THEN NULL
+      ELSE (a.reports_sum_valid::numeric / NULLIF(a.valid_cnt,0))
+    END AS report_density_valid,
     CASE
       WHEN a.valid_cnt = 0 THEN NULL
       WHEN a.valid_cnt BETWEEN 1 AND 16 THEN 1

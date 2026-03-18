@@ -23,9 +23,9 @@ DB_CONFIG = {
 }
 
 # Run Configuration
-RUN_ID = "rb20v2_20260202_191900_sg_001"
-CONTRACT_VERSION = "contract_v1"
-SHARD_CNT = 64
+RUN_ID = os.getenv("RUN_ID", "rb20v2_20260202_191900_sg_001")
+CONTRACT_VERSION = os.getenv("CONTRACT_VERSION", "contract_v1")
+SHARD_CNT = int(os.getenv("SHARD_CNT", "64"))
 TARGET_ROWS_PER_BUCKET = 200000
 CONCURRENCY = 8  # Global concurrency for the script
 
@@ -57,6 +57,23 @@ def run_sql(sql, args=None, fetch=False):
         raise e
     finally:
         conn.close()
+
+
+def get_shard_ids():
+    """Load actual shard ids for the target run from shard_plan."""
+    rows = run_sql(
+        "SELECT shard_id FROM rb20_v2_5.shard_plan WHERE run_id=%s ORDER BY shard_id",
+        (RUN_ID,),
+        fetch=True,
+    )
+    return [row[0] for row in rows]
+
+
+def clear_run_state():
+    log("Clearing step03 transient state for run...")
+    run_sql(f"DELETE FROM rb20_v2_5.step03_task_plan WHERE run_id='{RUN_ID}'")
+    run_sql(f"DELETE FROM rb20_v2_5.step03_block_bucket WHERE run_id='{RUN_ID}'")
+    run_sql(f"DELETE FROM rb20_v2_5.profile_pre_stage WHERE run_id='{RUN_ID}'")
 
 def log_task_status(shard_id, bucket_id, status):
     # Use a fresh connection for status updates
@@ -384,6 +401,7 @@ def main():
     log(f"=== Starting Step 03 FULL Optimization Rollout (Run: {RUN_ID}) ===")
     
     # 1. Prep
+    clear_run_state()
     prep_slim_table()
     
     # FIX: Validate slim table has data
@@ -396,7 +414,10 @@ def main():
     
     # 2. Plan Generation (Phase A) - SQL Based
     log("Generating Bucket Plans for all shards (SQL Based)...")
-    shards = list(range(SHARD_CNT))
+    shards = get_shard_ids()
+    if not shards:
+        log(f"ERROR: No shard ids found in shard_plan for run_id={RUN_ID}.")
+        sys.exit(1)
     
     conn = get_db_conn()
     for sid in shards:
@@ -413,7 +434,7 @@ def main():
     if not tasks:
         log("No pending tasks found.")
     else:
-        log(f"Executing {len(tasks)} buckets across {SHARD_CNT} shards (Concurrency: {CONCURRENCY})...")
+        log(f"Executing {len(tasks)} buckets across {len(shards)} shards (Concurrency: {CONCURRENCY})...")
         start_t = time.time()
         
         with Pool(CONCURRENCY) as p:

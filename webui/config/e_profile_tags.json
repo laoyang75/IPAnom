@@ -1,0 +1,201 @@
+{
+  "version": 5,
+  "description": "E库 CIDR 段漏斗式画像标签 v5。标签按顺序执行，每个标签在前面标签的剩余池上工作。",
+  "tags": [
+    {
+      "id": "cloud_service",
+      "name": "☁️ 云服务商",
+      "emoji": "☁️",
+      "color": "#ff6a00",
+      "logic": "AND",
+      "description": "云服务商 IP 段(58段/1,805 IP)。高设备密度，WiFi主导(98.5%)。典型云/代理出口特征。",
+      "conditions": [
+        {"field": "top_operator", "op": "IN", "value": ["阿里云","腾讯云","华为云","百度云","亚马逊","微软","京东云","天翼云","UCloud","金山云"], "label": "运营商=云服务商"}
+      ],
+      "notes": "当前E库中云服务商58段/1,805 IP。"
+    },
+    {
+      "id": "root_anomaly",
+      "name": "🚨 Root异常",
+      "emoji": "🚨",
+      "color": "#ef4444",
+      "logic": "AND",
+      "description": "Root上报比例≥20%的异常段(137段/3万IP)。电信77段(avg_root_ratio=34.5%)、联通52段(31.0%)、移动8段(30.9%)。Root占比高是典型的设备篡改/群控特征，不适合作为正常网络标签。",
+      "conditions": [
+        {"field": "root_report_ratio", "op": ">=", "value": 0.20, "label": "Root占比 ≥ 20%"}
+      ],
+      "notes": "137段中，电信77段avg_ip=107，联通52段avg_ip=418，移动8段avg_ip=10。排在前面确保后续标签不会命中这些段。"
+    },
+    {
+      "id": "mobile_telecom",
+      "name": "📶 移动出口·电信",
+      "emoji": "📶",
+      "color": "#58a6ff",
+      "logic": "AND",
+      "description": "中国电信移动NAT出口(5,595段/191万IP)。移动占比≥85%，DAA/DNA avg=13.2，dev/IP=84.7。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国电信", "label": "运营商=中国电信"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 3, "label": "DAA/DNA ≥ 3"}
+      ],
+      "notes": "与H库 mobile_telecom 对齐。"
+    },
+    {
+      "id": "mobile_unicom",
+      "name": "📶 移动出口·联通",
+      "emoji": "📶",
+      "color": "#f97316",
+      "logic": "AND",
+      "description": "中国联通移动NAT出口(297段/15.5万IP)。dev/IP=355。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国联通", "label": "运营商=中国联通"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 3, "label": "DAA/DNA ≥ 3"}
+      ],
+      "notes": "联通段数少但单段IP多(avg=522 IP/段)。"
+    },
+    {
+      "id": "mobile_cmcc",
+      "name": "📶 移动出口·移动",
+      "emoji": "📶",
+      "color": "#22c55e",
+      "logic": "AND",
+      "description": "中国移动移动NAT出口(308段/6.3万IP)。dev/IP=2,885。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国移动", "label": "运营商=中国移动"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 3, "label": "DAA/DNA ≥ 3"}
+      ],
+      "notes": "设备密度最高(2,885 dev/ip)。"
+    },
+    {
+      "id": "mobile_guangdian",
+      "name": "📶 移动出口·广电",
+      "emoji": "📶",
+      "color": "#a855f7",
+      "logic": "AND",
+      "description": "广电网移动NAT出口(11段/2.7万IP)。移动占比86%，DAA/DNA 14.7，dev/IP=571。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "广电网", "label": "运营商=广电网"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.85, "label": "移动占比 ≥ 85%"},
+        {"field": "daa_dna_ratio", "op": ">=", "value": 3, "label": "DAA/DNA ≥ 3"}
+      ],
+      "notes": "广电网运营商被现有标签遗漏（只覆盖三大运营商），特征与移动出口完全一致。"
+    },
+    {
+      "id": "scattered_mobile_telecom",
+      "name": "📱 零散移动·电信",
+      "emoji": "📱",
+      "color": "#38bdf8",
+      "logic": "AND",
+      "description": "中国电信零散移动段。移动占比≥30%，Root高危已由root_anomaly前置拦截。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国电信", "label": "运营商=中国电信"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.30, "label": "移动占比 ≥ 30%"}
+      ],
+      "notes": "漏斗排在移动出口和Root异常之后，自动排除已标签段。"
+    },
+    {
+      "id": "scattered_mobile_unicom",
+      "name": "📱 零散移动·联通",
+      "emoji": "📱",
+      "color": "#fb923c",
+      "logic": "AND",
+      "description": "中国联通零散移动段。移动占比≥30%，Root高危已由root_anomaly前置拦截。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国联通", "label": "运营商=中国联通"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.30, "label": "移动占比 ≥ 30%"}
+      ],
+      "notes": "联通零散移动段极少。"
+    },
+    {
+      "id": "scattered_mobile_cmcc",
+      "name": "📱 零散移动·移动",
+      "emoji": "📱",
+      "color": "#4ade80",
+      "logic": "AND",
+      "description": "中国移动零散移动段。移动占比≥30%，Root高危已由root_anomaly前置拦截。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国移动", "label": "运营商=中国移动"},
+        {"field": "mobile_device_ratio", "op": ">=", "value": 0.30, "label": "移动占比 ≥ 30%"}
+      ],
+      "notes": "数量最少但单IP密度极高。"
+    },
+    {
+      "id": "broadband_telecom",
+      "name": "🏠 家庭宽带·电信",
+      "emoji": "🏠",
+      "color": "#6366f1",
+      "logic": "AND",
+      "description": "中国电信家庭住宅宽带(超5万段)。典型特征：工作日活跃占比约71.4%(5/7天)，无工时聚集，深夜有稳定活跃，WiFi极高(>90%)。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国电信", "label": "运营商=中国电信"},
+        {"field": "workday_report_ratio", "op": ">=", "value": 0.65, "label": "工作日占比 ≥ 65%"},
+        {"field": "workday_report_ratio", "op": "<=", "value": 0.80, "label": "工作日占比 ≤ 80%"},
+        {"field": "late_night_report_ratio", "op": ">=", "value": 0.05, "label": "深夜活跃 > 5%"},
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi比例 > 90%"}
+      ],
+      "notes": "超大网络(1/4B以上)强拆后，极大规模符合该基准。"
+    },
+    {
+      "id": "broadband_unicom",
+      "name": "🏠 家庭宽带·联通",
+      "emoji": "🏠",
+      "color": "#ec4899",
+      "logic": "AND",
+      "description": "中国联通家庭住宅宽带。工作日活跃占比约71.4%(5/7天)，无工时聚集，深夜有稳定活跃，WiFi极高(>90%)。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国联通", "label": "运营商=中国联通"},
+        {"field": "workday_report_ratio", "op": ">=", "value": 0.65, "label": "工作日占比 ≥ 65%"},
+        {"field": "workday_report_ratio", "op": "<=", "value": 0.80, "label": "工作日占比 ≤ 80%"},
+        {"field": "late_night_report_ratio", "op": ">=", "value": 0.05, "label": "深夜活跃 > 5%"},
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi比例 > 90%"}
+      ],
+      "notes": "特征与电信家宽一致。"
+    },
+    {
+      "id": "broadband_cmcc",
+      "name": "🏠 家庭宽带·移动",
+      "emoji": "🏠",
+      "color": "#14b8a6",
+      "logic": "AND",
+      "description": "中国移动家庭住宅宽带。工作日活跃占比约71.4%(5/7天)，无工时聚集，深夜有稳定活跃，WiFi极高(>90%)。",
+      "conditions": [
+        {"field": "top_operator", "op": "=", "value": "中国移动", "label": "运营商=中国移动"},
+        {"field": "workday_report_ratio", "op": ">=", "value": 0.65, "label": "工作日占比 ≥ 65%"},
+        {"field": "workday_report_ratio", "op": "<=", "value": 0.80, "label": "工作日占比 ≤ 80%"},
+        {"field": "late_night_report_ratio", "op": ">=", "value": 0.05, "label": "深夜活跃 > 5%"},
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi比例 > 90%"}
+      ],
+      "notes": "特征与电信/联通家宽一致。"
+    },
+    {
+      "id": "broadband_guangdian",
+      "name": "🏠 家庭宽带·广电系",
+      "emoji": "🏠",
+      "color": "#8b5cf6",
+      "logic": "AND",
+      "description": "广电系运营商家庭宽带。覆盖广东广电、歌华有线、天威视讯、东方有线、各省广电等有线电视网络宽带。",
+      "conditions": [
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi比例 > 90%"},
+        {"field": "late_night_report_ratio", "op": ">=", "value": 0.05, "label": "深夜活跃 > 5%"},
+        {"field": "top_operator", "op": "IN", "value": ["广东广电","歌华有线","天威视讯","东方有线","江苏广电","广州广电","福建广电","河北广电","吉视传媒股份有限公司","山东广电","内蒙古广电","湖南有线","重庆广电","厦门广电","陕西广电","贵州广电","宁夏广电","天津广电","河南广电","湖北楚天广电","北方联合广电","同煤通信","广电网"], "label": "运营商=广电系"}
+      ],
+      "notes": "覆盖所有广电系有线电视网络运营商的家庭宽带段。"
+    },
+    {
+      "id": "broadband_other",
+      "name": "🏠 家庭宽带·其他ISP",
+      "emoji": "🏠",
+      "color": "#64748b",
+      "logic": "AND",
+      "description": "鹏博士、长城宽带、方正宽带等其他ISP的家庭宽带。WiFi高、有深夜活跃的典型住宅网络。",
+      "conditions": [
+        {"field": "wifi_device_ratio", "op": ">=", "value": 0.90, "label": "WiFi比例 > 90%"},
+        {"field": "late_night_report_ratio", "op": ">=", "value": 0.05, "label": "深夜活跃 > 5%"},
+        {"field": "mobile_device_ratio", "op": "<", "value": 0.30, "label": "移动占比 < 30%"}
+      ],
+      "notes": "兜底标签，覆盖所有WiFi高+深夜活跃但移动占比低的段。排在所有移动标签和广电宽带之后。"
+    }
+  ]
+}

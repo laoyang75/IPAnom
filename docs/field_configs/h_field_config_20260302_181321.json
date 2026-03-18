@@ -1,0 +1,399 @@
+{
+  "library": "h",
+  "created_at": "2026-03-02T18:13:21.528356",
+  "fields": [
+    {
+      "name": "block_id_final",
+      "keep": false,
+      "category": "结构",
+      "desc": "最终块ID",
+      "comment": ""
+    },
+    {
+      "name": "shard_id",
+      "keep": false,
+      "category": "结构",
+      "desc": "分片编号",
+      "comment": ""
+    },
+    {
+      "name": "simple_score",
+      "keep": false,
+      "category": "评分",
+      "desc": "wA+wD综合评分",
+      "comment": ""
+    },
+    {
+      "name": "wa",
+      "keep": false,
+      "category": "评分",
+      "desc": "IP数量权重(5档)",
+      "comment": ""
+    },
+    {
+      "name": "wd",
+      "keep": false,
+      "category": "评分",
+      "desc": "密度权重(5档)",
+      "comment": ""
+    },
+    {
+      "name": "density",
+      "keep": true,
+      "category": "评分",
+      "desc": "IP密度(设备/IP)",
+      "comment": ""
+    },
+    {
+      "name": "network_tier_final",
+      "keep": false,
+      "category": "评分",
+      "desc": "网络规模等级",
+      "comment": ""
+    },
+    {
+      "name": "member_cnt_total",
+      "keep": false,
+      "category": "结构",
+      "desc": "自然块成员总数",
+      "comment": ""
+    },
+    {
+      "name": "valid_cnt",
+      "keep": false,
+      "category": "结构",
+      "desc": "有效IP数",
+      "comment": ""
+    },
+    {
+      "name": "ip_count",
+      "keep": true,
+      "category": "规模",
+      "desc": "原始表JOIN后去重IP数",
+      "comment": ""
+    },
+    {
+      "name": "total_reports",
+      "keep": true,
+      "category": "规模",
+      "desc": "过滤后上报总数",
+      "comment": ""
+    },
+    {
+      "name": "total_reports_pre_filter",
+      "keep": true,
+      "category": "规模",
+      "desc": "过滤前上报总数",
+      "comment": ""
+    },
+    {
+      "name": "total_devices",
+      "keep": true,
+      "category": "规模",
+      "desc": "过滤后设备总数",
+      "comment": ""
+    },
+    {
+      "name": "total_devices_pre_filter",
+      "keep": true,
+      "category": "规模",
+      "desc": "过滤前设备总数",
+      "comment": ""
+    },
+    {
+      "name": "daa_reports",
+      "keep": true,
+      "category": "上报",
+      "desc": "DAA业务上报",
+      "comment": ""
+    },
+    {
+      "name": "dna_reports",
+      "keep": true,
+      "category": "上报",
+      "desc": "DNA业务上报",
+      "comment": ""
+    },
+    {
+      "name": "worktime_reports",
+      "keep": true,
+      "category": "上报",
+      "desc": "工作时间上报",
+      "comment": ""
+    },
+    {
+      "name": "workday_reports",
+      "keep": true,
+      "category": "上报",
+      "desc": "工作日上报",
+      "comment": ""
+    },
+    {
+      "name": "weekend_reports",
+      "keep": true,
+      "category": "上报",
+      "desc": "周末上报",
+      "comment": ""
+    },
+    {
+      "name": "late_night_reports",
+      "keep": true,
+      "category": "上报",
+      "desc": "深夜上报",
+      "comment": ""
+    },
+    {
+      "name": "wifi_devices",
+      "keep": true,
+      "category": "设备",
+      "desc": "WiFi设备数",
+      "comment": ""
+    },
+    {
+      "name": "mobile_devices",
+      "keep": true,
+      "category": "设备",
+      "desc": "移动网络设备数",
+      "comment": ""
+    },
+    {
+      "name": "vpn_devices",
+      "keep": true,
+      "category": "设备",
+      "desc": "VPN设备数",
+      "comment": ""
+    },
+    {
+      "name": "wired_devices",
+      "keep": true,
+      "category": "设备",
+      "desc": "有线网络设备数",
+      "comment": ""
+    },
+    {
+      "name": "abnormal_net_devices",
+      "keep": true,
+      "category": "设备",
+      "desc": "异常网络设备数",
+      "comment": "这个应该是命中异常库的，如果是这个很重要，是一个独立的画像"
+    },
+    {
+      "name": "empty_net_devices",
+      "keep": false,
+      "category": "设备",
+      "desc": "空网络状态设备数",
+      "comment": ""
+    },
+    {
+      "name": "total_apps",
+      "keep": true,
+      "category": "设备",
+      "desc": "应用数量",
+      "comment": ""
+    },
+    {
+      "name": "android_id_count",
+      "keep": true,
+      "category": "ID",
+      "desc": "安卓ID数量",
+      "comment": ""
+    },
+    {
+      "name": "oaid_count",
+      "keep": true,
+      "category": "ID",
+      "desc": "OAID数量",
+      "comment": ""
+    },
+    {
+      "name": "google_id_count",
+      "keep": true,
+      "category": "ID",
+      "desc": "谷歌广告ID数量",
+      "comment": ""
+    },
+    {
+      "name": "boot_id_count",
+      "keep": false,
+      "category": "ID",
+      "desc": "启动ID数量",
+      "comment": ""
+    },
+    {
+      "name": "model_count",
+      "keep": true,
+      "category": "ID",
+      "desc": "型号数量",
+      "comment": "要去重"
+    },
+    {
+      "name": "manufacturer_count",
+      "keep": true,
+      "category": "ID",
+      "desc": "制造商数量",
+      "comment": "要去重"
+    },
+    {
+      "name": "ssid_count",
+      "keep": false,
+      "category": "网络",
+      "desc": "SSID去重数",
+      "comment": "要去重"
+    },
+    {
+      "name": "bssid_count",
+      "keep": false,
+      "category": "网络",
+      "desc": "BSSID去重数",
+      "comment": ""
+    },
+    {
+      "name": "gateway_reports",
+      "keep": false,
+      "category": "网络",
+      "desc": "网关存在上报次数",
+      "comment": ""
+    },
+    {
+      "name": "ethernet_reports",
+      "keep": false,
+      "category": "网络",
+      "desc": "以太网上报次数",
+      "comment": ""
+    },
+    {
+      "name": "wifi_comparable_reports",
+      "keep": false,
+      "category": "网络",
+      "desc": "WiFi可比上报次数",
+      "comment": ""
+    },
+    {
+      "name": "proxy_reports",
+      "keep": true,
+      "category": "风险",
+      "desc": "代理上报",
+      "comment": ""
+    },
+    {
+      "name": "root_reports",
+      "keep": true,
+      "category": "风险",
+      "desc": "Root设备上报",
+      "comment": ""
+    },
+    {
+      "name": "adb_reports",
+      "keep": true,
+      "category": "风险",
+      "desc": "ADB调试上报",
+      "comment": ""
+    },
+    {
+      "name": "charging_reports",
+      "keep": true,
+      "category": "风险",
+      "desc": "充电状态上报",
+      "comment": ""
+    },
+    {
+      "name": "max_single_device_reports",
+      "keep": true,
+      "category": "风险",
+      "desc": "单设备最大上报",
+      "comment": ""
+    },
+    {
+      "name": "avg_reports_per_ip",
+      "keep": true,
+      "category": "衍生",
+      "desc": "每IP平均上报",
+      "comment": ""
+    },
+    {
+      "name": "avg_devices_per_ip",
+      "keep": true,
+      "category": "衍生",
+      "desc": "每IP平均设备",
+      "comment": ""
+    },
+    {
+      "name": "avg_active_days",
+      "keep": true,
+      "category": "衍生",
+      "desc": "平均活跃天数",
+      "comment": ""
+    },
+    {
+      "name": "wifi_device_ratio",
+      "keep": true,
+      "category": "衍生",
+      "desc": "WiFi设备占比",
+      "comment": ""
+    },
+    {
+      "name": "mobile_device_ratio",
+      "keep": true,
+      "category": "衍生",
+      "desc": "移动设备占比",
+      "comment": ""
+    },
+    {
+      "name": "vpn_device_ratio",
+      "keep": true,
+      "category": "衍生",
+      "desc": "VPN设备占比",
+      "comment": ""
+    },
+    {
+      "name": "workday_report_ratio",
+      "keep": true,
+      "category": "衍生",
+      "desc": "工作日上报占比",
+      "comment": ""
+    },
+    {
+      "name": "late_night_report_ratio",
+      "keep": true,
+      "category": "衍生",
+      "desc": "深夜上报占比",
+      "comment": ""
+    },
+    {
+      "name": "daa_dna_ratio",
+      "keep": true,
+      "category": "衍生",
+      "desc": "DAA/DNA比值",
+      "comment": ""
+    },
+    {
+      "name": "top_operator",
+      "keep": false,
+      "category": "衍生",
+      "desc": "主要运营商",
+      "comment": ""
+    },
+    {
+      "name": "distinct_operators",
+      "keep": false,
+      "category": "衍生",
+      "desc": "运营商种类数",
+      "comment": ""
+    },
+    {
+      "name": "unstable_ip_count",
+      "keep": false,
+      "category": "稳定性",
+      "desc": "不稳定IP数",
+      "comment": ""
+    },
+    {
+      "name": "unstable_ip_ratio",
+      "keep": false,
+      "category": "稳定性",
+      "desc": "不稳定IP占比",
+      "comment": ""
+    }
+  ],
+  "computed_columns": []
+}

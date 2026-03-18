@@ -5,6 +5,7 @@ import multiprocessing
 import time
 from datetime import datetime
 from typing import List
+from pathlib import Path
 
 # ==========================================
 # Configuration & Constants
@@ -23,8 +24,8 @@ os.environ["PGUSER"] = "postgres"
 os.environ["PGPASSWORD"] = "123456"
 os.environ["PGDATABASE"] = "ip_loc2"
 
-# Base Paths (Copied from Runbook)
-BASE_DIR = "/Users/yangcongan/cursor/2/Y_IP_Codex_RB2_5/03_sql"
+# Base Paths
+BASE_DIR = str(Path(__file__).resolve().parent.parent / "03_sql")
 
 # SQL Files Map
 SQL_FILES = {
@@ -90,7 +91,7 @@ def exec_sql_file(file_path, replacements, description=""):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"SQL file not found: {file_path}")
     
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
         
     for k, v in replacements.items():
@@ -98,7 +99,7 @@ def exec_sql_file(file_path, replacements, description=""):
         
     # Create temp execution file
     temp_filename = f"/tmp/rb20_exec_{int(time.time()*1000)}_{os.getpid()}.sql"
-    with open(temp_filename, 'w') as f:
+    with open(temp_filename, 'w', encoding='utf-8') as f:
         f.write(content)
         
     try:

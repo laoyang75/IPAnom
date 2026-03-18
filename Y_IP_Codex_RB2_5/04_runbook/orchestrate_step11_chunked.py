@@ -22,11 +22,13 @@ DB_CONFIG = {
     "password": os.environ["PGPASSWORD"]
 }
 
-RUN_ID = "rb20v2_20260202_191900_sg_001"
-CONTRACT_VERSION = "contract_v1"
-SHARD_CNT = 64
-BLOCK_CHUNK_SIZE = 500  # Number of blocks per SQL execution
-CONCURRENCY = 8
+RUN_ID = os.getenv("RUN_ID", "rb20v2_20260202_191900_sg_001")
+CONTRACT_VERSION = os.getenv("CONTRACT_VERSION", "contract_v1")
+SHARD_CNT = int(os.getenv("SHARD_CNT", "64"))
+BLOCK_CHUNK_SIZE = int(os.getenv("BLOCK_CHUNK_SIZE", "100"))
+CONCURRENCY = int(os.getenv("CONCURRENCY", "8"))
+WORK_MEM = os.getenv("STEP11_WORK_MEM", "256MB")
+STATEMENT_TIMEOUT = os.getenv("STEP11_STATEMENT_TIMEOUT", "15min")
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S', stream=sys.stdout)
 
@@ -56,6 +58,24 @@ def run_sql(sql, args=None, fetch=False):
         raise e
     finally:
         conn.close()
+
+
+def get_shard_ids():
+    """Load actual shard ids for the target run from preh_blocks or shard_plan."""
+    rows = run_sql(
+        "SELECT DISTINCT shard_id FROM rb20_v2_5.preh_blocks WHERE run_id=%s ORDER BY shard_id",
+        (RUN_ID,),
+        fetch=True,
+    )
+    shard_ids = [row[0] for row in rows]
+    if shard_ids:
+        return shard_ids
+    rows = run_sql(
+        "SELECT shard_id FROM rb20_v2_5.shard_plan WHERE run_id=%s ORDER BY shard_id",
+        (RUN_ID,),
+        fetch=True,
+    )
+    return [row[0] for row in rows]
 
 def prep_slim_table_v2():
     log("Checking/Prepping source_members_slim (V2 with operator)...")
@@ -128,6 +148,7 @@ def process_shard_chunked(shard_id):
         
         for i in range(total_chunks):
             chunk = blocks[i*BLOCK_CHUNK_SIZE : (i+1)*BLOCK_CHUNK_SIZE]
+            chunk_start = time.time()
             
             # Optimization: pass chunk as simple list string or temp table? 
             # List string is fine for 500 IDs.
@@ -137,7 +158,9 @@ def process_shard_chunked(shard_id):
             sql = f"""
             BEGIN;
             SET LOCAL enable_hashagg = on;
-            SET LOCAL work_mem = '256MB';
+            SET LOCAL enable_nestloop = off;
+            SET LOCAL work_mem = '{WORK_MEM}';
+            SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}';
             
             WITH preh AS (
               SELECT unnest(ARRAY[{block_list_sql}]) as block_id_natural
@@ -215,6 +238,10 @@ def process_shard_chunked(shard_id):
             COMMIT;
             """
             cur.execute(sql)
+            log(
+                f"Shard {shard_id}: Chunk {i + 1}/{total_chunks} "
+                f"({len(chunk)} blocks) done in {time.time() - chunk_start:.2f}s."
+            )
             
         log(f"Shard {shard_id}: Done.")
         conn.close()
@@ -230,13 +257,19 @@ def main():
     prep_slim_table_v2()
     
     # 2. Processing
-    shards = list(range(SHARD_CNT))
-    log(f"Processing {SHARD_CNT} shards with concurrency {CONCURRENCY}...")
+    shards = get_shard_ids()
+    if not shards:
+        log(f"ERROR: No shard ids found for run_id={RUN_ID}.")
+        sys.exit(1)
+    log(f"Processing {len(shards)} shards with concurrency {CONCURRENCY}...")
     
     pool = Pool(CONCURRENCY)
-    pool.map(process_shard_chunked, shards)
+    results = pool.map(process_shard_chunked, shards)
     pool.close()
     pool.join()
+    if not all(results):
+        log("ERROR: Step 11 has failed shards.")
+        sys.exit(1)
     
     log("=== Step 11 Processing Complete ===")
 

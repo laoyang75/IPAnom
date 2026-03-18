@@ -21,6 +21,10 @@ WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint;
 DELETE FROM rb20_v2_5.e_atoms
 WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint;
 
+SET enable_nestloop = off;
+SET work_mem = '256MB';
+SET statement_timeout = '15min';
+
 -- 1) E Atoms（先产出全量 atoms，再标记 is_e_atom）
 WITH r1 AS (
   SELECT ip_long, atom27_id
@@ -94,11 +98,15 @@ SELECT
   (atom27_end * 32 + 31)::bigint AS ip_end
 FROM runs;
 
--- 3) E Members（R1 中落在 E Runs 覆盖的 atom27 段）
+-- 3) E Members（R1 中落在 E Runs 覆盖的 atom27 段，额外排除 H 库成员防止交叉）
 WITH r1 AS (
   SELECT ip_long, atom27_id
   FROM rb20_v2_5.r1_members
   WHERE run_id='{{run_id}}' AND shard_id={{shard_id}}::smallint
+    AND NOT EXISTS (
+      SELECT 1 FROM rb20_v2_5.h_members hm
+      WHERE hm.run_id='{{run_id}}' AND hm.ip_long=r1_members.ip_long
+    )
 ),
 atom_to_run AS (
   -- 先把 /27 原子映射到 run（行数≈e_atom_cnt_pass），再与 r1 做等值 join，避免 70w×range 的大范围 join
@@ -111,6 +119,7 @@ atom_to_run AS (
    AND ea.atom27_id BETWEEN er.atom27_start AND er.atom27_end
   WHERE ea.run_id='{{run_id}}' AND ea.shard_id={{shard_id}}::smallint
     AND ea.is_e_atom
+    AND NOT er.short_run
 )
 INSERT INTO rb20_v2_5.e_members(
   run_id, contract_version, shard_id,

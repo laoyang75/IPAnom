@@ -70,24 +70,24 @@ async def _trace_ip(ip_long: int, run_id: str = None):
         result["stages"].append({
             "stage": "source_members",
             "status": "not_found",
-            "detail": "该 IP 不在源成员库中（可能被非中国过滤排除）"
+            "detail": "该 IP 不在源成员库中（可能被非中国过滤排除，或通过其他路径入库）"
         })
-        return result
-
-    result["ip_address"] = sm.get("ip_address", result["ip_address"])
-    result["country"] = sm.get("country")
-    result["operator"] = sm.get("operator")
-    result["report_count"] = sm.get("report_count")
-    result["device_count"] = sm.get("device_count")
-    result["mobile_device_count"] = sm.get("mobile_device_count")
-    result["is_abnormal"] = sm.get("is_abnormal")
-    result["is_valid"] = sm.get("is_valid")
-    result["shard_id"] = sm.get("shard_id")
-    result["stages"].append({
-        "stage": "source_members",
-        "status": "found",
-        "detail": f"Shard {sm['shard_id']} | {'⚠️ 异常' if sm.get('is_abnormal') else '✅ 正常'} | 国家: {sm.get('country')} | 运营商: {sm.get('operator')}"
-    })
+        # 不提前返回，继续检查 H/E/F 分类
+    else:
+        result["ip_address"] = sm.get("ip_address", result["ip_address"])
+        result["country"] = sm.get("country")
+        result["operator"] = sm.get("operator")
+        result["report_count"] = sm.get("report_count")
+        result["device_count"] = sm.get("device_count")
+        result["mobile_device_count"] = sm.get("mobile_device_count")
+        result["is_abnormal"] = sm.get("is_abnormal")
+        result["is_valid"] = sm.get("is_valid")
+        result["shard_id"] = sm.get("shard_id")
+        result["stages"].append({
+            "stage": "source_members",
+            "status": "found",
+            "detail": f"Shard {sm['shard_id']} | {'⚠️ 异常' if sm.get('is_abnormal') else '✅ 正常'} | 国家: {sm.get('country')} | 运营商: {sm.get('operator')}"
+        })
 
     # Stage 2: map_member_block_natural
     nbm = await fetch_one(f"""
@@ -202,6 +202,44 @@ async def _trace_ip(ip_long: int, run_id: str = None):
         result["classification"] = "E"
         result["atom27_id"] = e.get("atom27_id")
         result["e_run_id"] = e.get("e_run_id")
+
+        # 补查 e_cidr_summary 获取完整画像
+        e_run_id = e.get("e_run_id")
+        if e_run_id:
+            es = await fetch_one(f"""
+                SELECT *
+                FROM {SCHEMA}.e_cidr_summary
+                WHERE run_id = :run_id AND e_run_id = :e_run_id
+            """, {"run_id": run_id, "e_run_id": e_run_id})
+            if es:
+                es_dict = dict(es)
+                result["e_profile"] = es_dict
+                ip_ct = es_dict.get("ip_count", "?")
+                total_dev = es_dict.get("total_devices", "?")
+                total_rpt = es_dict.get("total_reports", "?")
+                tier = es_dict.get("network_tier_final", "?")
+                score = es_dict.get("simple_score", "?")
+                wifi_r = es_dict.get("wifi_device_ratio")
+                mobile_r = es_dict.get("mobile_device_ratio")
+                operator = es_dict.get("top_operator", "?")
+                start_ip = es_dict.get("start_ip_text", "?")
+                wifi_pct = f"{wifi_r*100:.1f}%" if wifi_r is not None else "?"
+                mobile_pct = f"{mobile_r*100:.1f}%" if mobile_r is not None else "?"
+                proxy = es_dict.get("proxy_reports", 0)
+                root = es_dict.get("root_reports", 0)
+                adb = es_dict.get("adb_reports", 0)
+                flags = []
+                if proxy: flags.append(f"代理:{proxy}")
+                if root: flags.append(f"Root:{root}")
+                if adb: flags.append(f"ADB:{adb}")
+                flag_str = " | " + " ".join(flags) if flags else ""
+
+                result["stages"].append({
+                    "stage": "e_cidr_profile",
+                    "status": "found",
+                    "detail": f"📊 E库画像: {start_ip} | {tier} | 评分:{score} | IP:{ip_ct} 设备:{total_dev} 上报:{total_rpt} | WiFi:{wifi_pct} 移动:{mobile_pct} | 运营商:{operator}{flag_str}"
+                })
+
         result["stages"].append({
             "stage": "classification",
             "status": "E",
@@ -237,10 +275,82 @@ async def _trace_ip(ip_long: int, run_id: str = None):
         })
         return result
 
+    # Fallback: 按起始 IP 搜索 CIDR 段 (e_cidr_summary / h_block_summary)
+    ip_str = long_to_ip(ip_long)
+
+    # 尝试 e_cidr_summary
+    e_cidr = await fetch_one(f"""
+        SELECT *
+        FROM {SCHEMA}.e_cidr_summary
+        WHERE run_id = :run_id AND start_ip_text = :ip
+    """, {"run_id": run_id, "ip": ip_str})
+    if e_cidr:
+        es_dict = dict(e_cidr)
+        result["classification"] = "E_CIDR"
+        result["e_run_id"] = es_dict.get("e_run_id")
+        result["e_profile"] = es_dict
+        tier = es_dict.get("network_tier_final", "?")
+        score = es_dict.get("simple_score", "?")
+        ip_ct = es_dict.get("ip_count", "?")
+        total_dev = es_dict.get("total_devices", "?")
+        total_rpt = es_dict.get("total_reports", "?")
+        wifi_r = es_dict.get("wifi_device_ratio")
+        mobile_r = es_dict.get("mobile_device_ratio")
+        operator = es_dict.get("top_operator", "?")
+        wifi_pct = f"{wifi_r*100:.1f}%" if wifi_r is not None else "?"
+        mobile_pct = f"{mobile_r*100:.1f}%" if mobile_r is not None else "?"
+        proxy = es_dict.get("proxy_reports", 0)
+        root = es_dict.get("root_reports", 0)
+        adb = es_dict.get("adb_reports", 0)
+        flags = []
+        if proxy: flags.append(f"代理:{proxy}")
+        if root: flags.append(f"Root:{root}")
+        if adb: flags.append(f"ADB:{adb}")
+        flag_str = " | " + " ".join(flags) if flags else ""
+        result["stages"].append({
+            "stage": "e_cidr_lookup",
+            "status": "found",
+            "detail": f"📊 E库CIDR段: {ip_str} | {tier} | 评分:{score} | IP:{ip_ct} 设备:{total_dev} 上报:{total_rpt} | WiFi:{wifi_pct} 移动:{mobile_pct} | 运营商:{operator}{flag_str}"
+        })
+        result["stages"].append({
+            "stage": "classification",
+            "status": "E_CIDR",
+            "detail": f"🟣 E 类 CIDR 段起始 IP | e_run: {es_dict.get('e_run_id')}"
+        })
+        return result
+
+    # 尝试 h_block_summary
+    h_block = await fetch_one(f"""
+        SELECT *
+        FROM {SCHEMA}.h_block_summary
+        WHERE run_id = :run_id AND start_ip_text = :ip
+    """, {"run_id": run_id, "ip": ip_str})
+    if h_block:
+        hb_dict = dict(h_block)
+        result["classification"] = "H_BLOCK"
+        result["h_profile"] = hb_dict
+        tier = hb_dict.get("network_tier_final", "?")
+        score = hb_dict.get("simple_score", "?")
+        ip_ct = hb_dict.get("ip_count", "?")
+        total_dev = hb_dict.get("total_devices", "?")
+        total_rpt = hb_dict.get("total_reports", "?")
+        operator = hb_dict.get("top_operator", "?")
+        result["stages"].append({
+            "stage": "h_block_lookup",
+            "status": "found",
+            "detail": f"📊 H库Block: {ip_str} | {tier} | 评分:{score} | IP:{ip_ct} 设备:{total_dev} 上报:{total_rpt} | 运营商:{operator}"
+        })
+        result["stages"].append({
+            "stage": "classification",
+            "status": "H_BLOCK",
+            "detail": f"🟠 H 类 Block 起始 IP"
+        })
+        return result
+
     result["stages"].append({
         "stage": "classification",
         "status": "unknown",
-        "detail": "⚪ 未分类 — 可能 Pipeline 尚未完成"
+        "detail": "⚪ 未分类 — 该 IP 不在任何库中"
     })
     return result
 

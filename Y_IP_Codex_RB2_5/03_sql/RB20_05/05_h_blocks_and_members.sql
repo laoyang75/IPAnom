@@ -11,7 +11,7 @@ WHERE run_id='{{run_id}}';
 DELETE FROM rb20_v2_5.h_blocks
 WHERE run_id='{{run_id}}';
 
--- H Blocks：仅 final tier = '中型网络'
+-- H Blocks：final tier = 中型/大型/超大网络（高密度连续块）
 INSERT INTO rb20_v2_5.h_blocks(
   run_id, contract_version,
   block_id_final, block_id_parent,
@@ -30,9 +30,11 @@ SELECT
   pf.reports_sum_valid
 FROM rb20_v2_5.profile_final pf
 WHERE pf.run_id='{{run_id}}'
-  AND pf.network_tier_final='中型网络';
+  AND pf.network_tier_final IN ('中型网络','大型网络','超大网络')
+  AND pf.valid_cnt >= 4
+  AND pf.member_cnt_total >= 4;
 
--- H Members：membership（含 abnormal），但 H 的准入已由 network_tier_final 固化为 valid 口径产物
+-- H Members：membership（含 abnormal IP），H 准入由 network_tier_final + valid_cnt>=4 + member_cnt_total>=4 决定
 INSERT INTO rb20_v2_5.h_members(
   run_id, contract_version,
   ip_long, block_id_final
@@ -60,4 +62,3 @@ INSERT INTO rb20_v2_5.core_numbers(run_id, contract_version, metric_name, metric
 SELECT '{{run_id}}','{{contract_version}}','h_member_cnt', COUNT(*)::numeric
 FROM rb20_v2_5.h_members
 WHERE run_id='{{run_id}}';
-
